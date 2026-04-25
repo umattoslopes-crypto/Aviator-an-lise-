@@ -1,7 +1,8 @@
-import streamlit as st
+
+        import streamlit as st
 import re
 
-st.set_page_config(page_title="Aviator Predictor Pro", page_icon="✈️")
+st.set_page_config(page_title="Analisador Pro", page_icon="✈️")
 
 def formatar_vela(val):
     if val >= 10: return f'<b style="color: #ff00ff;">{val}x</b>'
@@ -14,10 +15,20 @@ st.title("✈️ Analisador de Padrões")
 if 'dados' not in st.session_state:
     st.session_state.dados = []
 
-# --- INSERIR DADOS ---
-st.subheader("📥 Alimentar Dados")
-col1, col2 = st.columns([3, 1])
+# --- 1. ÁREA DE IMPORTAÇÃO (ABERTA) ---
+st.subheader("📥 Importar Lista (500 velas)")
+texto_lista = st.text_area("Cole os números do site aqui:", height=100)
+if st.button("IMPORTAR TUDO", use_container_width=True):
+    if texto_lista:
+        nums = re.findall(r"[-+]?\d*\.\d+|\d+", texto_lista.replace(',', '.'))
+        st.session_state.dados.extend([float(n) for n in nums])
+        st.success(f"{len(nums)} velas adicionadas!")
 
+st.markdown("---")
+
+# --- 2. ÁREA MANUAL ---
+st.subheader("✍️ Entrada Manual")
+col1, col2 = st.columns([3, 1])
 with col1:
     nova_vela = st.number_input("Última vela:", min_value=1.0, step=0.01, key="input_vela")
 with col2:
@@ -25,42 +36,27 @@ with col2:
         st.session_state.dados.append(nova_vela)
         st.rerun()
 
-# --- PROCURAR PADRÃO ---
+# --- 3. BOTÃO DE PROCURA ---
 st.markdown("---")
 if st.button("🔍 PROCURAR PADRÃO", use_container_width=True):
     if len(st.session_state.dados) >= 11:
-        # Usa as últimas 10 como base
         padrao_busca = st.session_state.dados[-10:]
         encontrou = False
-        
-        # Procura no histórico
         for i in range(len(st.session_state.dados) - 13):
             if st.session_state.dados[i:i+10] == padrao_busca:
                 encontrou = True
-                # Pega as 3 próximas
                 v1, v2, v3 = st.session_state.dados[i+10], st.session_state.dados[i+11], st.session_state.dados[i+12]
-                
                 st.subheader("🎯 SINAL IDENTIFICADO")
-                
                 for pos, v in enumerate([v1, v2, v3], 1):
                     if v >= 8:
-                        # Exibe a mensagem exatamente como você pediu
                         distancia = "APÓS ESSA RODADA" if pos == 1 else f"DAQUI A {pos} RODADAS"
-                        st.markdown(f"""
-                        <div style="background-color: #ffd700; padding: 20px; border-radius: 10px; border: 2px solid #b8860b; color: black; text-align: center;">
-                            <h2 style="margin: 0;">⚠️ {distancia}</h2>
-                            <h1 style="margin: 0;">VELA DE {v}x</h1>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.write(f"Rodada {pos}: {v}x")
-        
+                        st.markdown(f'<div style="background-color: #ffd700; padding: 15px; border-radius: 10px; color: black; text-align: center; font-weight: bold; border: 2px solid black;">⚠️ {distancia}: VELA DE {v}x</div>', unsafe_allow_html=True)
         if not encontrou:
-            st.warning("Padrão de 10 velas não localizado no histórico.")
+            st.warning("Padrão de 10 velas não encontrado.")
     else:
-        st.error("Insira pelo menos 11 velas para analisar.")
+        st.error("Alimente com pelo menos 11 velas.")
 
-# --- HISTÓRICO ---
+# --- 4. HISTÓRICO ---
 st.markdown("---")
 if st.session_state.dados:
     st.subheader("📋 Histórico")
@@ -69,3 +65,4 @@ if st.session_state.dados:
     if st.button("Limpar Tudo"):
         st.session_state.dados = []
         st.rerun()
+
