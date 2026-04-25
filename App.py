@@ -1,56 +1,73 @@
 import streamlit as st
+import re
 
-# Configuração da página para parecer um App profissional
-st.set_page_config(page_title="Aviator Predictor", page_icon="✈️", layout="centered")
+# Configuração da página para celular
+st.set_page_config(page_title="Aviator Master Bot", page_icon="✈️")
 
-# Estilo para cores de velas
-def color_vela(val):
-    if val >= 10: return f'<span style="color: #ff00ff; font-weight: bold;">{val}x (ROSA)</span>'
-    if val >= 2: return f'<span style="color: #32cd32; font-weight: bold;">{val}x</span>'
-    return f'<span style="color: #ff4b4b;">{val}x</span>'
+# Estilo visual das velas
+def cor_vela(val):
+    if val >= 10: return f'<div style="background-color: #ff00ff; color: white; padding: 5px; border-radius: 5px; margin: 2px; display: inline-block; font-weight: bold;">{val}x 🚀</div>'
+    if val >= 2: return f'<div style="background-color: #32cd32; color: white; padding: 5px; border-radius: 5px; margin: 2px; display: inline-block; font-weight: bold;">{val}x</div>'
+    return f'<div style="background-color: #ff4b4b; color: white; padding: 5px; border-radius: 5px; margin: 2px; display: inline-block;">{val}x</div>'
 
 st.title("✈️ Aviator Smart Analyzer")
-st.markdown("---")
 
-# Inicializar histórico
+# Memória dos dados
 if 'dados' not in st.session_state:
     st.session_state.dados = []
 
-# --- ENTRADA DE DADOS ---
-st.subheader("📥 Alimentar Histórico")
-col1, col2 = st.columns([3, 1])
-with col1:
-    nova_vela = st.number_input("Digite a última vela que saiu:", min_value=1.0, step=0.1, format="%.2f")
-with col2:
-    if st.button("Adicionar"):
-        st.session_state.dados.append(nova_vela)
+# --- 📥 MÓDULO DE IMPORTAÇÃO (LISTA GRANDE) ---
+with st.expander("📥 Importar Lista de Velas (500+)", expanded=False):
+    st.write("Se conseguir copiar os números do site, cole-os abaixo:")
+    lista_texto = st.text_area("Cole aqui (ex: 1.54, 2.80, 10.5, 1.22...)")
+    if st.button("Processar e Salvar Lista"):
+        if lista_texto:
+            # Puxa apenas os números, ignorando letras 'x', vírgulas ou espaços
+            numeros = re.findall(r"[-+]?\d*\.\d+|\d+", lista_texto.replace(',', '.'))
+            novos_dados = [float(n) for n in numeros]
+            st.session_state.dados.extend(novos_dados)
+            st.success(f"Sucesso! {len(novos_dados)} velas adicionadas.")
+            st.rerun()
 
-# --- ANÁLISE DE VELAS ALTAS ---
-if len(st.session_state.dados) > 5:
-    st.subheader("🎯 Próximas Velas e Alertas")
-    
-    # Lógica: Procurar o que aconteceu após as últimas 3 velas
+# --- ➕ MÓDULO DE ENTRADA MANUAL ---
+st.markdown("---")
+nova_vela = st.number_input("Última vela que saiu:", min_value=1.0, step=0.01)
+if st.button("Adicionar Vela"):
+    st.session_state.dados.append(nova_vela)
+    st.success(f"Vela {nova_vela}x registrada!")
+
+# --- 🎯 ANÁLISE E ALERTAS ---
+if len(st.session_state.dados) >= 4:
+    st.subheader("🎯 Alertas de Próximas Velas")
+    # Analisa as últimas 3 velas para prever a próxima
     ultimas_3 = st.session_state.dados[-3:]
-    st.write(f"Analisando padrão atual: **{ultimas_3}**")
+    st.write(f"Padrão atual: **{ultimas_3}**")
     
-    encontrou = False
+    encontrados = []
     for i in range(len(st.session_state.dados) - 4):
         if st.session_state.dados[i:i+3] == ultimas_3:
             proxima = st.session_state.dados[i+3]
-            encontrou = True
-            
-            # Alerta de Vela Alta
-            if proxima >= 5:
-                st.success(f"⚠️ **ALERTA DE VELA ALTA!** Na última vez que essa sequência saiu, a próxima vela foi **{proxima}x**.")
-            else:
-                st.info(f"Probabilidade da próxima vela ser: **{proxima}x**")
+            encontrados.append(proxima)
     
-    if not encontrou:
-        st.warning("Aguardando mais dados para identificar um padrão de vela alta.")
+    if encontrados:
+        for p in encontrados:
+            if p >= 10:
+                st.error(f"🚨 **ALERTA DE VELA ROSA!** Após esse padrão, já saiu uma vela de {p}x!")
+            elif p >= 5:
+                st.warning(f"🔥 **ALERTA DE VELA ALTA!** Possível vela de {p}x identificada no histórico.")
+            else:
+                st.info(f"✅ Padrão encontrado: Próxima foi {p}x.")
+    else:
+        st.write("Buscando repetição no histórico...")
 
-# --- EXIBIÇÃO DO HISTÓRICO ---
+# --- 📋 HISTÓRICO VISUAL ---
 st.markdown("---")
-st.subheader("📋 Últimas Coletadas")
-cols = st.columns(5)
-for idx, v in enumerate(reversed(st.session_state.dados[-10:])):
-    cols[idx % 5].markdown(color_vela(v), unsafe_allow_html=True)
+st.subheader("📋 Histórico (Últimas 20)")
+if st.session_state.dados:
+    cols = st.columns(1)
+    for v in reversed(st.session_state.dados[-20:]):
+        st.markdown(cor_vela(v), unsafe_allow_html=True)
+    
+    if st.button("Limpar Histórico"):
+        st.session_state.dados = []
+        st.rerun()
