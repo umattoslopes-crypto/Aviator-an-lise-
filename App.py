@@ -1,5 +1,4 @@
-
-        import streamlit as st
+import streamlit as st
 import re
 
 st.set_page_config(page_title="Analisador Pro", page_icon="✈️")
@@ -15,9 +14,9 @@ st.title("✈️ Analisador de Padrões")
 if 'dados' not in st.session_state:
     st.session_state.dados = []
 
-# --- 1. ÁREA DE IMPORTAÇÃO (ABERTA) ---
+# --- 1. ÁREA DE IMPORTAÇÃO (ABERTA NO TOPO) ---
 st.subheader("📥 Importar Lista (500 velas)")
-texto_lista = st.text_area("Cole os números do site aqui:", height=100)
+texto_lista = st.text_area("Cole os números do site aqui:", height=100, help="Cole o histórico copiado do jogo")
 if st.button("IMPORTAR TUDO", use_container_width=True):
     if texto_lista:
         nums = re.findall(r"[-+]?\d*\.\d+|\d+", texto_lista.replace(',', '.'))
@@ -59,10 +58,9 @@ if st.button("🔍 PROCURAR PADRÃO", use_container_width=True):
 # --- 4. HISTÓRICO ---
 st.markdown("---")
 if st.session_state.dados:
-    st.subheader("📋 Histórico")
+    st.subheader("📋 Histórico Registrado")
     velas_html = " | ".join([formatar_vela(v) for v in st.session_state.dados[-20:]])
     st.markdown(velas_html, unsafe_allow_html=True)
     if st.button("Limpar Tudo"):
         st.session_state.dados = []
         st.rerun()
-
