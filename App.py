@@ -1,92 +1,91 @@
 
 import streamlit as st
-import re
+import os
 
-st.set_page_config(page_title="Aviator Data 10k", page_icon="✈️")
+# Configuração da página
+st.set_page_config(page_title="Analisador Pro 10k", layout="wide")
 
-# Estilos de velas para o histórico
-def formatar_vela(val):
-    if val >= 10: return f'<b style="color: #ff00ff;">{val}x</b>'
-    if val >= 5: return f'<b style="color: #ffd700;">{val}x ⭐</b>'
-    if val >= 2: return f'<b style="color: #00ff00;">{val}x</b>'
-    return f'<b style="color: #ff4b4b;">{val}x</b>'
+# --- 1. FUNÇÕES DE BANCO DE DADOS (ARQUIVO FÍSICO) ---
+ARQUIVO_DADOS = "historico_velas.csv"
 
-st.title("✈️ Analisador de Ciclos 10k")
+def carregar_dados():
+    if os.path.exists(ARQUIVO_DADOS):
+        with open(ARQUIVO_DADOS, "r") as f:
+            conteudo = f.read().strip()
+            if conteudo:
+                return [float(v) for v in conteudo.split(",") if v]
+    return []
 
-# Inicializa o banco de dados se não existir
+def salvar_dados(lista_velas):
+    # Mantém apenas as últimas 10.000 para o arquivo não ficar pesado demais
+    lista_velas = lista_velas[-10000:]
+    with open(ARQUIVO_DADOS, "w") as f:
+        f.write(",".join(map(str, lista_velas)))
+    return lista_velas
+
+# Inicializa o banco carregando do arquivo
 if 'banco_dados' not in st.session_state:
-    st.session_state.banco_dados = []
+    st.session_state.banco_dados = carregar_dados()
 
-# --- 1. PAINEL DE CONTROLE DO BANCO ---
-st.subheader(f"📊 Banco de Dados: {len(st.session_state.banco_dados)} velas")
+def formatar_vela(v):
+    cor = "#ff4b4b" if v < 2 else "#00ff00"
+    return f'<span style="color: {cor}; font-weight: bold;">{v:.2f}x</span>'
 
-# Campo para colar novas remessas
-texto_import = st.text_area("Cole novas velas para ACUMULAR no banco:", height=100)
+# --- 2. INTERFACE ---
+st.title("📊 Histórico Permanente (10.000 Velas)")
+st.info(f"O banco de dados atual possui: **{len(st.session_state.banco_dados)}** velas guardadas.")
 
-col_b1, col_b2 = st.columns(2)
-with col_b1:
-    if st.button("➕ ADICIONAR AO BANCO", use_container_width=True):
-        if texto_import:
-            # Extrai apenas os números
-            novos_nums = re.findall(r"[-+]?\d*\.\d+|\d+", texto_import.replace(',', '.'))
-            lista_novos = [float(n) for n in novos_nums]
-            # O SEGREDO: .extend adiciona sem apagar o que já existe
-            st.session_state.banco_dados.extend(lista_novos)
-            st.success(f"Mais {len(lista_novos)} velas salvas!")
+entrada = st.text_area("Cole as novas velas aqui:")
+
+if st.button("📥 Salvar no Histórico Permanente"):
+    if entrada:
+        try:
+            # CORREÇÃO: Lê o número completo (ex: 2.67) e não apenas o decimal
+            texto_limpo = entrada.replace(',', '.')
+            # Aceita números separados por espaço, vírgula ou quebra de linha
+            import re
+            novas_velas = [float(v) for v in re.findall(r"[-+]?\d*\.\d+|\d+", texto_limpo)]
+            
+            # Adiciona ao banco e salva no arquivo físico
+            st.session_state.banco_dados.extend(novas_velas)
+            st.session_state.banco_dados = salvar_dados(st.session_state.banco_dados)
+            
+            st.success(f"Adicionadas {len(novas_velas)} velas com sucesso!")
             st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao processar: {e}")
 
-with col_b2:
-    if st.button("🗑️ LIMPAR TUDO", use_container_width=True):
-        st.session_state.banco_dados = []
-        st.rerun()
-
+# --- 3. BUSCA DE PADRÃO EM 10.000 VELAS ---
 st.markdown("---")
+if len(st.session_state.banco_dados) >= 13:
+    padrao_atual = st.session_state.banco_dados[-10:]
+    encontrou = False
+    
+    # Varre todo o histórico carregado do arquivo
+    for i in range(len(st.session_state.banco_dados) - 13):
+        if st.session_state.banco_dados[i : i + 10] == padrao_atual:
+            encontrou = True
+            v1, v2, v3 = st.session_state.banco_dados[i+10], st.session_state.banco_dados[i+11], st.session_state.banco_dados[i+12]
+            
+            st.subheader("🎯 PADRÃO ENCONTRADO NO HISTÓRICO")
+            cols = st.columns(3)
+            for pos, v in enumerate([v1, v2, v3], 0):
+                cor = "#ff00ff" if v >= 10 else ("#ffd700" if v >= 5 else ("#00ff00" if v >= 2 else "#ff4b4b"))
+                cols[pos].markdown(f'''
+                    <div style="background-color: {cor}; padding: 20px; border-radius: 10px; color: black; text-align: center; font-weight: bold; border: 2px solid black;">
+                        {v:.2f}x
+                    </div>
+                ''', unsafe_allow_html=True)
 
-# --- 2. ENTRADA MANUAL (TEMPO REAL) ---
-st.subheader("✍️ Registro Manual")
-c1, c2 = st.columns([3, 1])
-with c1:
-    v_manual = st.number_input("Última vela:", min_value=1.0, step=0.01, key="v_man")
-with c2:
-    if st.button("Salvar"):
-        st.session_state.banco_dados.append(v_manual)
-        st.rerun()
-
-# --- 3. PROCURAR PADRÃO (BUSCA EM TODO O BANCO) ---
-st.markdown("---")
-if st.button("🔍 PROCURAR PADRÃO NAS 10k VELAS", use_container_width=True):
-    # Precisamos de 10 para o padrão e olhamos até 3 no futuro
-    if len(st.session_state.banco_dados) >= 13:
-        padrao_atual = st.session_state.banco_dados[-10:]
-        encontrou = False
-        
-        # Percorre o banco inteiro acumulado
-        for i in range(len(st.session_state.banco_dados) - 13):
-            if st.session_state.banco_dados[i:i+10] == padrao_atual:
-                encontrou = True
-                v1, v2, v3 = st.session_state.banco_dados[i+10], st.session_state.banco_dados[i+11], st.session_state.banco_dados[i+12]
-                
-                st.subheader("🎯 PADRÃO IDENTIFICADO")
-                for pos, v in enumerate([v1, v2, v3], 1):
-                    if v >= 5:
-                        msg = "APÓS ESSA RODADA" if pos == 1 else f"DAQUI A {pos} RODADAS"
-                        cor = "#ffd700" if v < 10 else "#ff00ff"
-                        st.markdown(f'''
-                        <div style="background-color: {cor}; padding: 15px; border-radius: 10px; color: black; text-align: center; font-weight: bold; border: 2px solid black; margin-bottom: 8px;">
-                            ⚠️ {msg}: VELA DE {v}x
-                        </div>
-                        ''', unsafe_allow_html=True)
-                    else:
-                        st.write(f"Rodada {pos} após padrão: {v}x")
-        
-        if not encontrou:
-            st.warning("Padrão de 10 velas não encontrado no seu banco acumulado.")
-    else:
-        st.error("Alimente o banco com pelo menos 13 velas.")
-
-# --- 4. HISTÓRICO VISUAL ---
+# --- 4. VISUALIZAÇÃO ---
 st.markdown("---")
 if st.session_state.banco_dados:
-    st.write("📋 **Últimas 20 velas do banco:**")
-    h_html = " | ".join([formatar_vela(v) for v in st.session_state.banco_dados[-20:]])
-    st.markdown(h_html, unsafe_allow_html=True)
+    if st.checkbox("Mostrar Histórico (Últimas 100)"):
+        h_html = " | ".join([formatar_vela(v) for v in st.session_state.banco_dados[-100:]])
+        st.markdown(f'<div style="word-wrap: break-word; font-family: monospace;">{h_html}</div>', unsafe_allow_html=True)
+
+    if st.button("🗑️ Resetar Todo o Arquivo"):
+        if os.path.exists(ARQUIVO_DADOS):
+            os.remove(ARQUIVO_DADOS)
+        st.session_state.banco_dados = []
+        st.rerun()
