@@ -1,6 +1,4 @@
-
-        
-   import streamlit as st
+import streamlit as st
 import pandas as pd
 import os
 import re
@@ -119,4 +117,3 @@ if st.button("🗑️ RESETAR BANCO DE DADOS"):
     if os.path.exists(ARQUIVO_HISTORICO): os.remove(ARQUIVO_HISTORICO)
     st.session_state.banco = []
     st.rerun()
-     
