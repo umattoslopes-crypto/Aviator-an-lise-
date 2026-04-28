@@ -3,8 +3,10 @@ import streamlit as st
 import re
 import time
 
+# Configuração da página - Mantendo layout centrado
 st.set_page_config(page_title="Aviator Predictor 10k", page_icon="✈️", layout="centered")
 
+# Cores e Formatação - Mantendo o sistema de cores anterior
 def formatar_vela(val):
     if val >= 100: return f'<b style="color: #ffffff; background-color: #4B0082; padding: 2px 5px; border-radius: 5px;">{val}x 💎</b>'
     if val >= 10: return f'<b style="color: #ff00ff;">{val}x 🚀</b>'
@@ -14,59 +16,60 @@ def formatar_vela(val):
 
 st.title("✈️ Analisador de Ciclos 10k")
 
-# Inicializa o banco acumulativo
+# Inicializa o banco acumulativo (Sem apagar o que já existe)
 if 'banco' not in st.session_state:
     st.session_state.banco = []
 
-# --- EXIBIÇÃO DO STATUS DO BANCO ---
-st.info(f"📊 Inteligência: {len(st.session_state.banco)} velas armazenadas (Limite: 10.000)")
+# Exibição do contador de banco de dados
+st.info(f"📊 Inteligência: {len(st.session_state.banco)} velas armazenadas")
 
-# --- 1. ÁREA DE IMPORTAÇÃO (ATÉ 500+) ---
+# --- 1. ÁREA DE IMPORTAÇÃO (CORREÇÃO DO NÚMERO ANTES DO PONTO) ---
 with st.expander("📥 Importar Grande Remessa", expanded=True):
-    texto_lista = st.text_area("Cole até 500 velas aqui para somar ao banco:")
+    texto_lista = st.text_area("Cole as velas aqui para somar ao banco:")
     if st.button("ALIMENTAR BANCO DE DADOS", use_container_width=True):
         if texto_lista:
-            nums = re.findall(r"[-+]?\d*\.\d+|\d+", texto_lista.replace(',', '.'))
-            novas = [float(n) for n in nums]
+            # CORREÇÃO AQUI: Captura o número inteiro e os decimais juntos
+            # A regra busca: dígitos + (opcionalmente: ponto ou vírgula + dígitos)
+            nums = re.findall(r"\d+[.,]?\d*", texto_lista)
+            # Converte para float tratando vírgulas como pontos
+            novas = [float(n.replace(',', '.')) for n in nums]
+            
             st.session_state.banco.extend(novas)
-            # Trava o limite em 10.000 para performance
+            # Mantém o limite de 10.000 velas
             st.session_state.banco = st.session_state.banco[-10000:]
-            st.success(f"Sucesso! {len(novas)} velas somadas ao histórico.")
+            st.success(f"Sucesso! {len(novas)} velas integradas corretamente (ex: 3.45).")
             st.rerun()
 
-# --- 2. ENTRADA MANUAL ---
+# --- 2. ENTRADA MANUAL (MANTIDA) ---
 st.markdown("---")
-col_m1, col_m2 = st.columns([2, 1])
+col_m1, col_m2 = st.columns()
 with col_m1:
-    v_manual = st.number_input("Última vela que saiu:", min_value=1.0, step=0.01, key="v_man")
+    v_manual = st.number_input("Última vela:", min_value=1.0, step=0.01, key="v_man")
 with col_m2:
     if st.button("Salvar Vela", use_container_width=True):
         st.session_state.banco.append(v_manual)
         st.rerun()
 
-# --- 3. BOTÃO DE BUSCA POR REPETIÇÃO ---
+# --- 3. BUSCA POR REPETIÇÃO (ANTECIPAÇÃO DE 10 RODADAS) ---
 st.markdown("---")
 if st.button("🔍 ACHAR PADRÃO E PREVER PRÓXIMAS", use_container_width=True):
-    if len(st.session_state.banco) >= 21: # 10 padrão + 10 futuro + margem
+    if len(st.session_state.banco) >= 21:
         padrao_busca = st.session_state.banco[-10:]
-        st.write(f"Buscando repetições para: `{padrao_busca}`")
-        
-        # Simula 10 segundos de análise para o "timing" de entrada
-        with st.spinner('Analisando ciclos de repetição...'):
-            time.sleep(1) # Delay técnico para organização visual
-            
         encontrou = False
-        # Percorre o banco de 10k velas
+        
+        # Percorre o banco inteiro
         for i in range(len(st.session_state.banco) - 21):
-            if st.session_state.banco[i:i+10] == padrao_busca:
+            # Compara as 10 velas com o padrão atual
+            if all(abs(st.session_state.banco[i+j] - padrao_busca[j]) < 0.01 for j in range(10)):
                 encontrou = True
-                # Escaneia as próximas 10 casas após o padrão
+                # Pega as próximas 10 casas futuras do histórico
                 futuro_10 = st.session_state.banco[i+10:i+20]
                 
-                st.subheader("🎯 CICLO ENCONTRADO NO HISTÓRICO")
+                st.subheader("🎯 CICLO ENCONTRADO")
                 for pos, v in enumerate(futuro_10, 1):
+                    # Alerta para velas acima de 8x (Destaque Dourado)
                     if v >= 8:
-                        dist = "PRÓXIMA VELA" if pos == 1 else f"EM {pos} RODADAS"
+                        dist = "PRÓXIMA VELA" if pos == 1 else f"DAQUI A {pos} RODADAS"
                         st.markdown(f'''
                         <div style="background-color: #ffd700; padding: 15px; border-radius: 10px; color: black; text-align: center; font-weight: bold; border: 3px solid black; margin-bottom: 10px;">
                             <h2 style="margin:0;">⚠️ {dist}</h2>
@@ -74,17 +77,17 @@ if st.button("🔍 ACHAR PADRÃO E PREVER PRÓXIMAS", use_container_width=True):
                         </div>
                         ''', unsafe_allow_html=True)
                     else:
-                        st.write(f"Rodada {pos}: {v}x")
+                        st.write(f"Rodada {pos} após o padrão: {v}x")
         
         if not encontrou:
-            st.warning("Padrão de 10 velas não localizado nas 10.000 rodadas do banco.")
+            st.warning("Padrão de 10 velas não localizado nas 10.000 rodadas.")
     else:
-        st.error("Alimente o app com mais dados. Precisamos das últimas 10 velas para procurar.")
+        st.error("Alimente o app com pelo menos 11 velas para iniciar a busca.")
 
-# --- 4. HISTÓRICO E LIMPEZA ---
+# --- 4. HISTÓRICO VISUAL (MANTIDO) ---
 st.markdown("---")
 if st.session_state.banco:
-    if st.button("🗑️ Resetar Banco de Dados"):
+    if st.button("🗑️ Resetar Banco"):
         st.session_state.banco = []
         st.rerun()
     
