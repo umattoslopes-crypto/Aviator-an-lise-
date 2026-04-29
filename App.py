@@ -32,10 +32,10 @@ st.title("📈 Analisador Pro: Histórico Completo")
 
 # --- SEÇÃO 1: ADICIONAR E SINCRONIZAR ---
 with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
-    metodo = st.tabs(["📝 Texto", "📷 Prints Sincronizados", "📂 Backup"])
+    aba1, aba2, aba3 = st.tabs(["📝 Texto", "📷 Prints Sincronizados", "📂 Backup"])
     
-    with metodo:
-        entrada = st.text_area("Cole as velas aqui:")
+    with aba1:
+        entrada = st.text_area("Cole as velas aqui (Ex: 1.50, 2.00):")
         if st.button("GRAVAR TEXTO", use_container_width=True):
             if entrada:
                 novas = [float(v.strip()) for v in entrada.replace(",", " ").split() if v.strip()]
@@ -44,8 +44,8 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                 st.success("✅ Gravado!")
                 st.rerun()
 
-    with metodo:
-        fotos = st.file_uploader("Suba os prints:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+    with aba2:
+        fotos = st.file_uploader("Suba um ou mais prints:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
         if fotos and st.button("LER E SINCRONIZAR", use_container_width=True):
             with st.spinner("🤖 Sincronizando..."):
                 reader = get_reader()
@@ -60,7 +60,6 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                         except: continue
                 
                 if lidas:
-                    # Lógica para evitar duplicar o final do histórico com o início do print
                     if not st.session_state.velas:
                         novas_reais = lidas
                     else:
@@ -78,10 +77,20 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                     else: st.warning("Velas já existem no histórico.")
                     st.rerun()
 
+    with aba3:
+        st.write("Restaure um histórico salvo:")
+        arq_backup = st.file_uploader("Arquivo CSV", type=['csv'])
+        if arq_backup and st.button("RESTAURAR"):
+            df_bkp = pd.read_csv(arq_backup)
+            st.session_state.velas = df_bkp['velas'].tolist()
+            salvar_dados(st.session_state.velas)
+            st.success("Histórico Restaurado!")
+            st.rerun()
+
 st.divider()
 
-# --- SEÇÃO 2: BUSCA DE PADRÃO (15 VELAS) ---
-st.subheader("🔍 BUSCAR PADRÃO")
+# --- SEÇÃO 2: BUSCA DE PADRÃO ---
+st.subheader("🔍 BUSCAR PADRÃO (15 VELAS)")
 if st.button("ANALISAR AGORA", use_container_width=True):
     if len(st.session_state.velas) > 1:
         ultima = st.session_state.velas[-1]
@@ -101,34 +110,31 @@ if st.button("ANALISAR AGORA", use_container_width=True):
 
 st.divider()
 
-# --- SEÇÃO 3: VISUALIZAÇÃO COMPLETA E CONTADOR ---
+# --- SEÇÃO 3: CONTADOR E TABELA COMPLETA ---
 st.subheader("📊 Contador")
 total = len(st.session_state.velas)
 st.header(f"{total} / 10.000")
 
-with st.expander("👁️ VER TODO O HISTÓRICO SALVO", expanded=False):
+with st.expander("👁️ VER TODO O HISTÓRICO SALVO", expanded=True):
     if total > 0:
-        # Criando a tabela com formatação impecável
         df_full = pd.DataFrame({
             "Posição": range(1, total + 1),
             "Vela": [f"{v:.2f}x" for v in st.session_state.velas]
         })
-        # Mostra as mais recentes no topo
         st.dataframe(df_full.iloc[::-1], use_container_width=True, height=400)
     else:
-        st.write("Banco de dados vazio.")
+        st.write("Banco vazio.")
 
 st.divider()
 
-# --- SEÇÃO 4: RESET E BACKUP ---
-col_bkp, col_rst = st.columns(2)
-with col_bkp:
-    csv = pd.DataFrame({"velas": st.session_state.velas}).to_csv(index=False)
-    st.download_button("💾 BAIXAR BACKUP", csv, "banco_aviator.csv", "text/csv")
-
-with col_rst:
+# --- SEÇÃO 4: BACKUP E RESET ---
+col_a, col_b = st.columns(2)
+with col_a:
+    csv_data = pd.DataFrame({"velas": st.session_state.velas}).to_csv(index=False)
+    st.download_button("💾 BAIXAR BACKUP", csv_data, "banco_aviator.csv", "text/csv")
+with col_b:
     if st.button("🗑️ ZERAR TUDO"):
-        if st.checkbox("Confirmar reset total?"):
+        if st.checkbox("Confirmar?"):
             if os.path.exists(DB_FILE): os.remove(DB_FILE)
             st.session_state.velas = []
             st.rerun()
