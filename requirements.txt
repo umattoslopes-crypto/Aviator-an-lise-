@@ -1,1 +1,8 @@
 streamlit
+pandas
+st-gsheets-connection
+easyocr
+opencv-python-headless
+Pillow
+numpy
+
