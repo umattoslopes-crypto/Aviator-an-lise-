@@ -41,7 +41,7 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                 novas = [float(v.strip()) for v in entrada.replace(",", " ").split() if v.strip()]
                 st.session_state.velas.extend(novas)
                 salvar_dados(st.session_state.velas)
-                st.success("✅ Gravado!")
+                st.success("✅ Gravado com sucesso!")
                 st.rerun()
 
     with aba2:
@@ -63,7 +63,6 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                     if not st.session_state.velas:
                         novas_reais = lidas
                     else:
-                        # Pega as últimas 15 para comparar e evitar duplicados
                         ultimas = st.session_state.velas[-15:]
                         ponto_corte = 0
                         for i in range(len(lidas)):
@@ -74,28 +73,28 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                     if novas_reais:
                         st.session_state.velas.extend(novas_reais)
                         salvar_dados(st.session_state.velas)
-                        st.success(f"🚀 {len(novas_reais)} novas velas adicionadas!")
-                    else: st.warning("Velas já existem no histórico.")
+                        st.success(f"🚀 {len(novas_reais)} novas velas!")
                     st.rerun()
 
     with aba3:
-        st.write("Restaure um histórico salvo:")
-        arq_backup = st.file_uploader("Arquivo CSV", type=['csv'])
-        if arq_backup and st.button("RESTAURAR"):
+        arq_backup = st.file_uploader("Arquivo CSV de Backup", type=['csv'])
+        if arq_backup and st.button("RESTAURAR HISTÓRICO"):
             df_bkp = pd.read_csv(arq_backup)
             st.session_state.velas = df_bkp['velas'].tolist()
             salvar_dados(st.session_state.velas)
-            st.success("Histórico Restaurado!")
+            st.success("Histórico restaurado!")
             st.rerun()
 
 st.divider()
 
-# --- SEÇÃO 2: BUSCA DE PADRÃO ---
-st.subheader("🔍 BUSCAR PADRÃO (15 VELAS)")
+# --- SEÇÃO 2: BUSCA DE PADRÃO (15 VELAS) ---
+st.subheader("🔍 BUSCAR PADRÃO (15 SUBSEQUENTES)")
 if st.button("ANALISAR AGORA", use_container_width=True):
     if len(st.session_state.velas) > 1:
         ultima = st.session_state.velas[-1]
         encontrou = False
+        st.write(f"Analisando sequências após a vela: **{ultima:.2f}x**")
+        
         for i in range(len(st.session_state.velas) - 1):
             if st.session_state.velas[i] == ultima:
                 seq = st.session_state.velas[i+1 : i+16]
@@ -107,42 +106,51 @@ if st.button("ANALISAR AGORA", use_container_width=True):
                         cols[idx % 5].write(f"{idx+1}º: {txt}")
                     encontrou = True
                     st.divider()
-        if not encontrou: st.info(f"Sem 8x após {ultima}x.")
+        if not encontrou: st.info(f"Nenhum padrão de 8x nas próximas 15 velas.")
+    else: st.warning("Adicione velas primeiro.")
 
 st.divider()
 
-# --- SEÇÃO 3: CONTADOR E TABELA ---
+# --- SEÇÃO 3: CONTADOR E VISUALIZAÇÃO COM 'X' ---
 st.subheader("📊 Contador de Histórico")
 total = len(st.session_state.velas)
 st.header(f"{total} / 10.000")
 
-with st.expander("👁️ VER TODO O HISTÓRICO SALVO", expanded=True):
+with st.expander("👁️ VER TODO O HISTÓRICO SALVO (COM X)", expanded=True):
     if total > 0:
+        # Tabela completa com formatação 'x'
         df_full = pd.DataFrame({
             "Posição": range(1, total + 1),
             "Vela": [f"{v:.2f}x" for v in st.session_state.velas]
         })
         st.dataframe(df_full.iloc[::-1], use_container_width=True, height=400)
+        
+        st.write("---")
+        st.write("### Últimas 20 (Resumo):")
+        ultimas_20 = st.session_state.velas[-20:][::-1]
+        exibicao = [f"🔥 **{v:.2f}x**" if v >= 8.0 else f"{v:.2f}x" for v in ultimas_20]
+        st.write(" | ".join(exibicao))
     else:
         st.write("Banco de dados vazio.")
 
 st.divider()
 
-# --- SEÇÃO 4: BACKUP E ZERAR CONTADOR ---
+# --- SEÇÃO 4: GERENCIAMENTO E RESET ---
 st.subheader("⚙️ Gerenciar Banco de Dados")
 
-# Botão de Backup
 csv_data = pd.DataFrame({"velas": st.session_state.velas}).to_csv(index=False)
 st.download_button("💾 BAIXAR BACKUP (CSV)", csv_data, "banco_aviator.csv", "text/csv", use_container_width=True)
 
 st.write("---")
+st.warning("Ação irreversível abaixo:")
+confirmar_reset = st.checkbox("Estou ciente e quero ZERAR o histórico agora")
 
-# Botão para Zerar o Contador (Reset Total)
-st.warning("Cuidado: A ação abaixo é irreversível!")
-if st.button("🗑️ ZERAR TODO O CONTADOR", use_container_width=True):
-    if st.checkbox("Confirmar que desejo APAGAR TUDO e voltar para 0?"):
+if st.button("🗑️ APAGAR TUDO E ZERAR CONTADOR", use_container_width=True):
+    if confirmar_reset:
+        st.session_state.velas = []
         if os.path.exists(DB_FILE):
             os.remove(DB_FILE)
-        st.session_state.velas = []
-        st.success("O contador foi zerado com sucesso!")
+        st.success("Histórico totalmente limpo!")
         st.rerun()
+    else:
+        st.error("Marque a caixa de confirmação para poder resetar.")
