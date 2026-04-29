@@ -63,6 +63,7 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                     if not st.session_state.velas:
                         novas_reais = lidas
                     else:
+                        # Pega as últimas 15 para comparar e evitar duplicados
                         ultimas = st.session_state.velas[-15:]
                         ponto_corte = 0
                         for i in range(len(lidas)):
@@ -110,8 +111,8 @@ if st.button("ANALISAR AGORA", use_container_width=True):
 
 st.divider()
 
-# --- SEÇÃO 3: CONTADOR E TABELA COMPLETA ---
-st.subheader("📊 Contador")
+# --- SEÇÃO 3: CONTADOR E TABELA ---
+st.subheader("📊 Contador de Histórico")
 total = len(st.session_state.velas)
 st.header(f"{total} / 10.000")
 
@@ -123,18 +124,25 @@ with st.expander("👁️ VER TODO O HISTÓRICO SALVO", expanded=True):
         })
         st.dataframe(df_full.iloc[::-1], use_container_width=True, height=400)
     else:
-        st.write("Banco vazio.")
+        st.write("Banco de dados vazio.")
 
 st.divider()
 
-# --- SEÇÃO 4: BACKUP E RESET ---
-col_a, col_b = st.columns(2)
-with col_a:
-    csv_data = pd.DataFrame({"velas": st.session_state.velas}).to_csv(index=False)
-    st.download_button("💾 BAIXAR BACKUP", csv_data, "banco_aviator.csv", "text/csv")
-with col_b:
-    if st.button("🗑️ ZERAR TUDO"):
-        if st.checkbox("Confirmar?"):
-            if os.path.exists(DB_FILE): os.remove(DB_FILE)
-            st.session_state.velas = []
-            st.rerun()
+# --- SEÇÃO 4: BACKUP E ZERAR CONTADOR ---
+st.subheader("⚙️ Gerenciar Banco de Dados")
+
+# Botão de Backup
+csv_data = pd.DataFrame({"velas": st.session_state.velas}).to_csv(index=False)
+st.download_button("💾 BAIXAR BACKUP (CSV)", csv_data, "banco_aviator.csv", "text/csv", use_container_width=True)
+
+st.write("---")
+
+# Botão para Zerar o Contador (Reset Total)
+st.warning("Cuidado: A ação abaixo é irreversível!")
+if st.button("🗑️ ZERAR TODO O CONTADOR", use_container_width=True):
+    if st.checkbox("Confirmar que desejo APAGAR TUDO e voltar para 0?"):
+        if os.path.exists(DB_FILE):
+            os.remove(DB_FILE)
+        st.session_state.velas = []
+        st.success("O contador foi zerado com sucesso!")
+        st.rerun()
