@@ -5,6 +5,7 @@ import numpy as np
 from PIL import Image
 import os
 
+# Configuração da página
 st.set_page_config(page_title="Analisador Pro", layout="centered")
 
 # Banco de Dados Local
@@ -77,17 +78,16 @@ with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
                     st.rerun()
 
     with aba3:
-        arq_backup = st.file_uploader("Arquivo CSV de Backup", type=['csv'])
-        if arq_backup and st.button("RESTAURAR HISTÓRICO"):
+        arq_backup = st.file_uploader("Arquivo CSV", type=['csv'])
+        if arq_backup and st.button("RESTAURAR"):
             df_bkp = pd.read_csv(arq_backup)
             st.session_state.velas = df_bkp['velas'].tolist()
             salvar_dados(st.session_state.velas)
-            st.success("Histórico restaurado!")
             st.rerun()
 
 st.divider()
 
-# --- SEÇÃO 2: BUSCA DE PADRÃO (15 VELAS) ---
+# --- SEÇÃO 2: BUSCA DE PADRÃO (15 VELAS COM X) ---
 st.subheader("🔍 BUSCAR PADRÃO (15 SUBSEQUENTES)")
 if st.button("ANALISAR AGORA", use_container_width=True):
     if len(st.session_state.velas) > 1:
@@ -106,19 +106,18 @@ if st.button("ANALISAR AGORA", use_container_width=True):
                         cols[idx % 5].write(f"{idx+1}º: {txt}")
                     encontrou = True
                     st.divider()
-        if not encontrou: st.info(f"Nenhum padrão de 8x nas próximas 15 velas.")
+        if not encontrou: st.info(f"Sem 8x nas próximas 15 velas.")
     else: st.warning("Adicione velas primeiro.")
 
 st.divider()
 
-# --- SEÇÃO 3: CONTADOR E VISUALIZAÇÃO COM 'X' ---
+# --- SEÇÃO 3: CONTADOR E TABELA (TUDO COM X) ---
 st.subheader("📊 Contador de Histórico")
 total = len(st.session_state.velas)
 st.header(f"{total} / 10.000")
 
-with st.expander("👁️ VER TODO O HISTÓRICO SALVO (COM X)", expanded=True):
+with st.expander("👁️ VER TODO O HISTÓRICO SALVO", expanded=True):
     if total > 0:
-        # Tabela completa com formatação 'x'
         df_full = pd.DataFrame({
             "Posição": range(1, total + 1),
             "Vela": [f"{v:.2f}x" for v in st.session_state.velas]
@@ -135,14 +134,13 @@ with st.expander("👁️ VER TODO O HISTÓRICO SALVO (COM X)", expanded=True):
 
 st.divider()
 
-# --- SEÇÃO 4: GERENCIAMENTO E RESET ---
+# --- SEÇÃO 4: GERENCIAMENTO E RESET TOTAL ---
 st.subheader("⚙️ Gerenciar Banco de Dados")
 
 csv_data = pd.DataFrame({"velas": st.session_state.velas}).to_csv(index=False)
 st.download_button("💾 BAIXAR BACKUP (CSV)", csv_data, "banco_aviator.csv", "text/csv", use_container_width=True)
 
 st.write("---")
-st.warning("Ação irreversível abaixo:")
 confirmar_reset = st.checkbox("Estou ciente e quero ZERAR o histórico agora")
 
 if st.button("🗑️ APAGAR TUDO E ZERAR CONTADOR", use_container_width=True):
@@ -153,4 +151,5 @@ if st.button("🗑️ APAGAR TUDO E ZERAR CONTADOR", use_container_width=True):
         st.success("Histórico totalmente limpo!")
         st.rerun()
     else:
-        st.error("Marque a caixa de confirmação para poder resetar.")
+        st.error("Marque a caixa de confirmação acima.")
+
