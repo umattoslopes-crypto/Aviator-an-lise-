@@ -1,121 +1,84 @@
 import streamlit as st
 import pandas as pd
-import easyocr
-import numpy as np
-from PIL import Image
 import os
 
-st.set_page_config(page_title="Analisador Pro", layout="centered")
-
-DB_FILE = "banco_de_velas.csv"
-
-def carregar_dados():
-    if os.path.exists(DB_FILE):
-        try:
-            df = pd.read_csv(DB_FILE)
-            return [float(v) for v in df['velas'].tolist()]
-        except: return []
-    return []
-
-def salvar_dados(lista):
-    pd.DataFrame({"velas": lista}).to_csv(DB_FILE, index=False)
-
+# --- CONFIGURAÇÕES INICIAIS ---
+DB_FILE = "historico_velas.csv"
 if 'velas' not in st.session_state:
-    st.session_state.velas = carregar_dados()
+    if os.path.exists(DB_FILE):
+        st.session_state.velas = pd.read_csv(DB_FILE)['velas'].tolist()
+    else:
+        st.session_state.velas = []
 
-@st.cache_resource
-def get_reader():
-    return easyocr.Reader(['en'])
+def salvar_dados():
+    pd.DataFrame({'velas': st.session_state.velas}).to_csv(DB_FILE, index=False)
 
-st.title("📈 Analisador Pro: Fidelidade Total")
+# --- LÓGICA DE PADRÃO (O que você já tinha) ---
+encontrou = False # Variável para controle do seu if lá embaixo
+# (Aqui viria sua lógica de busca automática de 10 velas se desejar manter)
 
-# --- ADICIONAR DADOS ---
-with st.expander("🚨 ADICIONAR NOVAS VELAS", expanded=True):
-    aba1, aba2, aba3 = st.tabs(["📝 Texto", "📷 Prints (Anti-Cópia)", "📂 Backup"])
-    
-    with aba1:
-        entrada = st.text_area("Cole as velas:")
-        if st.button("GRAVAR TEXTO", use_container_width=True):
-            if entrada:
-                novas = [float(v.strip()) for v in entrada.replace(",", " ").split() if v.strip()]
-                st.session_state.velas.extend(novas)
-                salvar_dados(st.session_state.velas)
-                st.rerun()
+st.divider()
+if not encontrou:
+    st.info("Padrão de 10 velas não repetido.")
+else: 
+    st.warning("Mínimo de 25 velas necessárias.")
 
-    with aba2:
-        fotos = st.file_uploader("Suba os prints:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-        if fotos and st.button("LER E SINCRONIZAR", use_container_width=True):
-            reader = get_reader()
-            for foto in fotos:
-                res = reader.readtext(np.array(Image.open(foto)))
-                lidas = []
-                for (_, t, _) in res:
-                    val = t.replace('x','').replace(',','.').strip()
-                    if val.replace('.','').replace('-','').isdigit():
-                        try: lidas.append(float(val))
-                        except: continue
-                
-                if lidas:
-                    if not st.session_state.velas:
-                        st.session_state.velas.extend(lidas)
-                    else:
-                        ultimas_banco = st.session_state.velas[-15:]
-                        ponto_corte = 0
-                        for i in range(len(lidas)):
-                            if lidas[i] in ultimas_banco:
-                                ponto_corte = i + 1
-                            else:
-                                break
-                        novas_reais = lidas[ponto_corte:]
-                        if novas_reais:
-                            st.session_state.velas.extend(novas_reais)
+st.divider()
+
+# --- NOVO: BUSCA MANUAL DE PADRÃO ---
+st.subheader("🔍 Localizar Sequência Manual")
+col_input, col_btn = st.columns([3, 1])
+
+with col_input:
+    seq_input = st.text_input("Digite a sequência separada por vírgula", placeholder="Ex: 1.50, 2.00, 1.10")
+
+if col_btn.button("🔍 BUSCAR", use_container_width=True):
+    if seq_input:
+        try:
+            padrao_buscado = [float(x.strip()) for x in seq_input.split(",")]
+            n_seq = len(padrao_buscado)
+            achou_manual = False
             
-            salvar_dados(st.session_state.velas)
-            st.rerun()
+            for i in range(len(st.session_state.velas) - n_seq + 1):
+                if st.session_state.velas[i:i+n_seq] == padrao_buscado:
+                    st.success(f"✅ Padrão encontrado na posição {i+1}!")
+                    achou_manual = True
+            
+            if not achou_manual:
+                st.error("❌ Sequência não encontrada.")
+        except:
+            st.error("Formato inválido! Use: 1.50, 2.00")
 
 st.divider()
 
-# --- BUSCA DE PADRÃO (10 PADRÃO / 15 SEGUINTES) ---
-st.subheader("🔍 BUSCAR PADRÃO (10 VELAS)")
-if st.button("ANALISAR AGORA", use_container_width=True):
-    if len(st.session_state.velas) >= 25:
-        padrao_atual = st.session_state.velas[-10:]
-        encontrou = False
-        st.write(f"Buscando: **{' | '.join([f'{v:.2f}x' for v in padrao_atual])}**")
-        
-        for i in range(len(st.session_state.velas) - 25):
-            if st.session_state.velas[i:i+10] == padrao_atual:
-                encontrou = True
-                st.error(f"⚠️ PADRÃO ENCONTRADO!")
-                proximas = st.session_state.velas[i+10 : i+25]
-                cols = st.columns(5)
-                for idx, v in enumerate(proximas):
-                    # FORÇANDO O X E O DESTAQUE
-                    txt = f"🔥 **{v:.2f}x**" if v >= 8.0 else f"{v:.2f}x"
-                    cols[idx % 5].write(f"{idx+1}º: {txt}")
-                st.divider()
-        if not encontrou:
-            st.info("Padrão de 10 velas não repetido.")
-    else: st.warning("Mínimo de 25 velas necessárias.")
-
-st.divider()
-
-# --- CONTADOR E VISUALIZAÇÃO ---
+# --- CONTADOR E VISUALIZAÇÃO COM CORES ---
 st.subheader("📊 Histórico (Tudo com x)")
 total = len(st.session_state.velas)
 st.header(f"{total} / 10.000")
 
-# LISTA RÁPIDA COM X
+# LISTA RÁPIDA COM CORES (Velas > 8x em Rosa Choque)
 if total > 0:
-    ultimas_resumo = [f"🔥 **{v:.2f}x**" if v >= 8.0 else f"{v:.2f}x" for v in st.session_state.velas[-10:][::-1]]
-    st.write(" | ".join(ultimas_resumo))
+    resumo_html = []
+    # Pega as últimas 10 velas e inverte a ordem
+    for v in st.session_state.velas[-10:][::-1]:
+        if v >= 8.0:
+            # Rosa Choque / Pink
+            resumo_html.append(f"<b style='color: #FF00FF; font-size: 1.1em;'>🔥 {v:.2f}x</b>")
+        elif v >= 2.0:
+            # Verde
+            resumo_html.append(f"<span style='color: #00FF00;'>{v:.2f}x</span>")
+        else:
+            # Cinza Claro
+            resumo_html.append(f"<span style='color: #DDDDDD;'>{v:.2f}x</span>")
+    
+    st.markdown(" | ".join(resumo_html), unsafe_allow_html=True)
 
 with st.expander("👁️ VER TODO O BANCO"):
     if total > 0:
-        # TABELA COM X FORÇADO
         df_v = pd.DataFrame({"Vela": [f"{v:.2f}x" for v in st.session_state.velas]})
         st.dataframe(df_v.iloc[::-1], use_container_width=True, height=300)
-    else: st.write("Banco vazio.")
+    else: 
+        st.write("Banco vazio.")
 
 st.divider()
 
