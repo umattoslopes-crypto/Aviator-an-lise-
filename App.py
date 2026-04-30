@@ -6,7 +6,7 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# --- CONFIGURAÇÕES DE PERSISTÊNCIA (GRAVA E NÃO APAGA) ---
+# --- 1. PERSISTÊNCIA (GRAVAÇÃO NO ARQUIVO) ---
 DB_FILE = "historico_velas.csv"
 
 if 'velas' not in st.session_state:
@@ -18,108 +18,113 @@ if 'velas' not in st.session_state:
 def salvar_dados():
     pd.DataFrame({'velas': st.session_state.velas}).to_csv(DB_FILE, index=False)
 
-# Inicializa o leitor EasyOCR
+# Carrega o leitor de imagem
 @st.cache_resource
 def load_ocr():
     return easyocr.Reader(['en'], gpu=False)
 
 reader = load_ocr()
 
-st.title("🤖 Analisador Pro - Crash")
+st.title("🤖 Analisador de Velas Pro")
 
-# --- ÁREA DE ENTRADA: PRINT E MANUAL ---
-st.subheader("📥 Inserir Novas Velas")
+# --- 2. ÁREA DE ENTRADA (PRINT + MANUAL) ---
+st.subheader("📥 Inserir Dados")
 
-tab1, tab2 = st.tabs(["📸 Carregar Print", "⌨️ Entrada Manual"])
+arquivo_img = st.file_uploader("📸 Suba o Print das Velas", type=['png', 'jpg', 'jpeg'])
+input_manual = st.text_area("⌨️ Ou cole as velas manualmente:", placeholder="Ex: 1.50 9.34 2.10...")
 
-with tab1:
-    arquivo_img = st.file_uploader("Suba o print aqui", type=['png', 'jpg', 'jpeg'])
-    texto_para_processar = ""
-    if arquivo_img:
-        img = Image.open(arquivo_img)
-        st.image(img, width=200)
-        if st.button("🔍 LER PRINT"):
-            with st.spinner("Extraindo números..."):
-                img_np = np.array(img)
-                resultado = reader.readtext(img_np)
-                texto_para_processar = " ".join([res[1] for res in resultado])
+# Variável para acumular o que foi lido
+texto_final = ""
 
-with tab2:
-    input_manual = st.text_area("Cole as velas aqui (até 500):", placeholder="Ex: 1.50 2.10 9.34...")
-    if input_manual:
-        texto_para_processar = input_manual
+if arquivo_img:
+    img = Image.open(arquivo_img)
+    st.image(img, width=200, caption="Imagem carregada")
+    with st.spinner("Lendo números do print..."):
+        img_np = np.array(img)
+        resultado = reader.readtext(img_np, detail=0) # detail=0 traz apenas o texto
+        texto_final = " ".join(resultado)
+        st.info(f"Texto detectado no print: {texto_final}")
 
-# --- LÓGICA DE PROCESSAMENTO (DESDUPLICAÇÃO) ---
-if st.button("📥 ADICIONAR AO HISTÓRICO (COM FILTRO)"):
-    if texto_para_processar:
-        # Extrai números e trata vírgula como ponto
-        novas_extraidas = [float(v) for v in re.findall(r"\d+\.\d+|\d+", texto_para_processar.replace(',', '.'))]
+# Se houver algo no manual, ele soma ao que veio do print
+if input_manual:
+    texto_final += " " + input_manual
+
+# --- 3. BOTÃO ÚNICO PARA SALVAR E FILTRAR REPETIDAS ---
+if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
+    if texto_final.strip():
+        # Extrai os números (trata vírgula como ponto)
+        novas = [float(v) for v in re.findall(r"\d+\.\d+|\d+", texto_final.replace(',', '.'))]
         
-        if novas_extraidas:
-            # Sincronização: evita repetir a última vela do print anterior
-            ultimas_banco = st.session_state.velas[-15:]
+        if novas:
+            # LÓGICA DE NÃO DUPLICAR: Compara o início do novo texto com o fim do banco
+            ultimas_banco = st.session_state.velas[-10:]
             ponto_corte = 0
-            for i in range(len(novas_extraidas)):
-                fatia = novas_extraidas[i:i+2] # Compara pares de velas
-                if any(fatia == ultimas_banco[j:j+2] for j in range(len(ultimas_banco)-1)):
-                    ponto_corte = i + 2
             
-            velas_finais = novas_extraidas[ponto_corte:]
+            # Tenta encontrar onde o print novo "encaixa" no final do antigo
+            for i in range(len(novas)):
+                # Se o par de velas bater com algum par no final do banco, corta as repetidas
+                if novas[i:i+2] in [ultimas_banco[j:j+2] for j in range(len(ultimas_banco)-1)]:
+                    ponto_corte = i + 2
 
-            if velas_finais:
-                st.session_state.velas.extend(velas_finais)
+            velas_ineditas = novas[ponto_corte:]
+
+            if velas_ineditas:
+                st.session_state.velas.extend(velas_ineditas)
                 st.session_state.velas = st.session_state.velas[-10000:]
                 salvar_dados()
-                st.success(f"✅ +{len(velas_finais)} velas inéditas adicionadas!")
+                st.success(f"✅ {len(velas_ineditas)} novas velas salvas com sucesso!")
                 st.rerun()
             else:
-                st.warning("⚠️ Nenhuma vela nova detectada.")
+                st.warning("⚠️ Todas as velas desse print já estão no banco.")
+    else:
+        st.error("Nenhum dado encontrado para adicionar.")
 
 st.divider()
 
-# --- BUSCA MANUAL ---
+# --- 4. BUSCA MANUAL ---
 st.subheader("🔍 Localizar Sequência")
-seq_input = st.text_input("Sequência alvo (ex: 1.50, 2.00)")
+seq_busca = st.text_input("Digite a sequência (ex: 1.50, 2.00)")
 if st.button("🔍 BUSCAR"):
-    if seq_input:
+    if seq_busca:
         try:
-            padrao = [float(x.strip()) for x in seq_input.replace(',', ' ').split()]
+            padrao = [float(x.strip()) for x in seq_busca.replace(',', ' ').split()]
             n = len(padrao)
-            posicoes = [i+1 for i in range(len(st.session_state.velas)-n+1) if st.session_state.velas[i:i+n] == padrao]
-            if posicoes: st.success(f"Padrão encontrado nas posições: {posicoes}")
+            indices = [i+1 for i in range(len(st.session_state.velas)-n+1) if st.session_state.velas[i:i+n] == padrao]
+            if indices: st.success(f"Encontrado nas posições: {indices}")
             else: st.error("Não encontrado.")
         except: st.error("Formato inválido.")
 
 st.divider()
 
-# --- HISTÓRICO COM "X" E CORES ---
+# --- 5. VISUALIZAÇÃO COM "X" E CORES (8x EM ROSA) ---
 total = len(st.session_state.velas)
-st.header(f"📊 {total} / 10.000 Velas")
+st.header(f"📊 Histórico: {total} Velas")
 
 if total > 0:
-    # Lista rápida colorida com X
+    # Lista horizontal colorida
     resumo_html = []
     for v in st.session_state.velas[-12:][::-1]:
-        cor = "#FF00FF" if v >= 8.0 else "#00FF00" if v >= 2.0 else "#FFFFFF"
-        resumo_html.append(f"<b style='color: {cor}; font-size: 1.1em;'>{v:.2f}x</b>")
+        cor = "#FF00FF" if v >= 8.0 else "#00FF00" if v >= 2.0 else "#BBBBBB"
+        resumo_html.append(f"<b style='color: {cor}; font-size: 1.2em;'>{v:.2f}x</b>")
     st.markdown(" | ".join(resumo_html), unsafe_allow_html=True)
 
-with st.expander("👁️ VER TODO O BANCO"):
-    if total > 0:
-        # DataFrame com X forçado e estilização rosa para >= 8x
+    # Tabela completa
+    with st.expander("👁️ VER TODO O BANCO (ORDEM RECENTE)"):
         df_v = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
         
-        def style_8x(val):
+        def colorir_8x(val):
             return 'color: #FF00FF; font-weight: bold' if val >= 8.0 else 'color: white'
         
-        # O .format("{:.2f}x") garante o x no final de todos os valores da tabela
-        st.dataframe(df_v.style.applymap(style_8x).format("{:.2f}x"), use_container_width=True, height=400)
+        # .format("{:.2f}x") coloca o X em todas as células
+        st.dataframe(df_v.style.applymap(colorir_8x).format("{:.2f}x"), use_container_width=True, height=400)
+else:
+    st.info("O banco de dados está vazio. Adicione velas acima.")
 
+# --- 6. RESET ---
 st.divider()
-
-# --- RESET ---
-if st.checkbox("Zerar histórico?"):
-    if st.button("🗑️ APAGAR TUDO"):
+if st.checkbox("Deseja apagar TODO o histórico?"):
+    if st.button("🗑️ ZERAR TUDO AGORA"):
         if os.path.exists(DB_FILE): os.remove(DB_FILE)
         st.session_state.velas = []
         st.rerun()
+                
