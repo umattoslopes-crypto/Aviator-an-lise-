@@ -6,8 +6,8 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# --- 1. PERSISTÊNCIA ---
-DB_FILE = "banco_velas_fiel.csv"
+# --- 1. PERSISTÊNCIA TOTAL (GRAVA E NÃO APAGA) ---
+DB_FILE = "banco_velas_projeto.csv"
 
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
@@ -26,13 +26,14 @@ def load_reader():
 
 reader = load_reader()
 
-# --- LAYOUT CONFORME O DESENHO ---
+# --- LAYOUT FIEL AO SEU DESENHO ---
 st.markdown("<h2 style='text-align: center;'>ATE 500 VELAS</h2>", unsafe_allow_html=True)
 
-aba_manual, aba_print = st.tabs(["📥 INSERIR MANUAL", "📸 INSERIR ATRAVÉS PRINT"])
+# Moldura de entrada com as abas conforme o desenho
+aba_manual, aba_print = st.tabs(["INSERIR MANUAL", "INSERIR ATRAVÉS PRINT"])
 
 with aba_manual:
-    manual_txt = st.text_area("Exemplo: 1.25x 4.10x", placeholder="Cole as velas aqui...", height=100)
+    manual_txt = st.text_area("Digite ou cole as velas:", placeholder="Ex: 1.25x 4.10x 9.34x", height=100)
 
 with aba_print:
     arquivo = st.file_uploader("Anexe o print aqui", type=['png', 'jpg', 'jpeg'], label_visibility="collapsed")
@@ -48,12 +49,12 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
         texto_bruto += " " + manual_txt
 
     if texto_bruto:
-        # Extração FIEL: Pega todos os números independente do valor
+        # Extração SEM FILTROS: Pega todos os números que encontrar
         novas = [float(v) for v in re.findall(r"(\d+[\.\d]*)", texto_bruto.replace(',', '.'))]
         
         if novas:
-            # Sincronização para não duplicar velas sobrepostas
-            ultimas_banco = st.session_state.velas[-15:]
+            # Sincronização (Anti-duplicação básica)
+            ultimas_banco = st.session_state.velas[-10:]
             ponto_corte = 0
             for i in range(len(novas)):
                 if novas[i:i+2] in [ultimas_banco[j:j+2] for j in range(len(ultimas_banco)-1)]:
@@ -63,20 +64,20 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
             if velas_finais:
                 st.session_state.velas.extend(velas_finais)
                 salvar()
-                st.success(f"{len(velas_finais)} velas adicionadas!")
+                st.success(f"Adicionadas {len(velas_finais)} velas.")
                 st.rerun()
 
 st.divider()
 
-# --- SEÇÃO: BUSCA DE PADRÃO COM ALERTA ---
+# --- SEÇÃO: BUSCA DE PADRÃO ---
 st.markdown("### BUSCA DE PADRAO")
 col_input, col_botao = st.columns([0.85, 0.15])
 
 with col_input:
-    seq_alvo = st.text_input("Insira o padrão de 10 velas", placeholder="Ex: 1.25, 2.00...", label_visibility="collapsed")
+    seq_alvo = st.text_input("Insira o padrão de 10 velas", placeholder="Ex: 1.25, 2.00, 1.10...", label_visibility="collapsed")
 
 with col_botao:
-    buscar = st.button("🔎")
+    buscar = st.button("🔎") # Botão redondo/ícone lateral
 
 if buscar and seq_alvo:
     try:
@@ -90,26 +91,26 @@ if buscar and seq_alvo:
                 achou = True
                 st.success(f"✅ PADRÃO ENCONTRADO! (Posição {i+1})")
                 
-                # ALERTA 15 VELAS APÓS
+                # ALERTA DE ANTECIPAÇÃO: MOSTRA AS 15 VELAS SEGUINTES
                 proximas = hist[i + n : i + n + 15]
                 if proximas:
                     st.warning("⚠️ ALERTA: PRÓXIMAS 15 VELAS")
                     fmt = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'}; font-size:1.1em;'>{v:.2f}x</b>" for v in proximas]
                     st.markdown(" , ".join(fmt), unsafe_allow_html=True)
         if not achou:
-            st.error("❌ Padrão não localizado.")
+            st.error("Padrão não localizado.")
     except:
         st.error("Formato inválido.")
 
 st.divider()
 
-# --- SEÇÃO: HISTÓRICO DE VELAS (TODAS) ---
+# --- SEÇÃO: HISTÓRICO DE VELAS (BANCO COMPLETO) ---
 st.markdown("### HISTORICO DE VELAS")
 if st.session_state.velas:
-    # Exibe TODAS as velas do banco
     df = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
     
     def colorir_8x(val):
+        # Apenas velas acima de 8x ficam em ROSA CHOQUE
         return 'color: #FF00FF; font-weight: bold' if val >= 8.0 else 'color: white'
 
     st.dataframe(
@@ -121,18 +122,19 @@ if st.session_state.velas:
 st.divider()
 
 # --- SEÇÃO: ULTIMAS 20 VELAS ADICIONADAS ---
-st.markdown("### ULTIMAS 20 VELAS ADICIONADAS")
+st.markdown("### ULTIMA 20 VELA ADICIONADA")
 if st.session_state.velas:
     ultimas_20 = st.session_state.velas[-20:][::-1]
     resumo_html = []
     for v in ultimas_20:
+        # Cores: Rosa (8x), Verde (2x), Branco (resto)
         cor = "#FF00FF" if v >= 8.0 else "#00FF00" if v >= 2.0 else "#FFFFFF"
         resumo_html.append(f"<span style='color:{cor}; font-weight:bold; font-size:1.1em;'>{v:.2f}x</span>")
     
     st.markdown(" , ".join(resumo_html), unsafe_allow_html=True)
 
-# Reset lateral
-if st.sidebar.checkbox("Limpar Tudo"):
+# Opção de apagar no menu lateral
+if st.sidebar.checkbox("Zerar Banco"):
     if st.sidebar.button("CONFIRMAR RESET"):
         if os.path.exists(DB_FILE): os.remove(DB_FILE)
         st.session_state.velas = []
