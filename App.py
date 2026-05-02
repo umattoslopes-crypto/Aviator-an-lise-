@@ -6,24 +6,33 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# ================================
-# BANCO DE DADOS (10.000 VELAS)
-# ================================
 DB_FILE = "banco_velas_projeto.csv"
+MAX_VELAS = 10000
 
+# ================================
+# CARREGAMENTO SEGURO (NÃO APAGA)
+# ================================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
-            df_load = pd.read_csv(DB_FILE)
-            st.session_state.velas = [float(v) for v in df_load['velas'].dropna().tolist() if float(v) > 0][-10000:]
-        except: st.session_state.velas = []
+            df = pd.read_csv(DB_FILE)
+            st.session_state.velas = [
+                float(v) for v in df['velas'].dropna()
+                if float(v) > 0
+            ]
+        except:
+            st.session_state.velas = []
     else:
         st.session_state.velas = []
 
 def salvar():
     if st.session_state.velas:
-        pd.DataFrame({'velas': st.session_state.velas[-10000:]}).to_csv(DB_FILE, index=False)
+        df = pd.DataFrame({'velas': st.session_state.velas[-MAX_VELAS:]})
+        df.to_csv(DB_FILE, index=False)
 
+# ================================
+# OCR
+# ================================
 @st.cache_resource
 def load_reader():
     return easyocr.Reader(['en'], gpu=False)
@@ -36,98 +45,140 @@ def preprocessar(img):
     img = np.where(img > 150, 255, 0).astype(np.uint8)
     return img
 
-def organizar_posicao_invertida(res):
+# ================================
+# 🔥 ORDEM CORRETA (CHAVE DO PROBLEMA)
+# ================================
+def organizar_por_posicao(res):
     itens = []
+
     for (bbox, texto, conf) in res:
         if 'x' in texto.lower():
-            # Coordenadas do polígono (y, x)
-            y = bbox[0][1]
             x = bbox[0][0]
+            y = bbox[0][1]
             itens.append((y, x, texto))
-    # Ordena de baixo para cima (Y desc) e direita para esquerda (X desc)
-    itens.sort(key=lambda i: (i[0], i[1]), reverse=True)
+
+    # 🔥 ordena de BAIXO → CIMA e DIREITA → ESQUERDA
+    itens.sort(key=lambda i: (-i[0], -i[1]))
+
     return " ".join([i[2] for i in itens])
 
 def extrair_velas(texto):
-    texto = texto.lower().replace(',', '.').replace(' ', '')
-    encontrados = re.findall(r"\d+\.\d+x|\d+x", texto)
+    texto = texto.lower()
+    texto = texto.replace(',', '.')
+    texto = texto.replace(' ', '')
+
+    encontrados = re.findall(r"\d+\.\d+x", texto)
+
     velas = []
     for v in encontrados:
         try:
             val = float(v.replace('x', ''))
-            if 1.0 <= val <= 10000: velas.append(val)
-        except: continue
+            if 1.0 <= val <= 1000:
+                velas.append(val)
+        except:
+            continue
+
     return velas
 
 # ================================
-# INTERFACE PRINCIPAL
+# INTERFACE
 # ================================
-st.markdown("<h2 style='text-align: center;'>HISTÓRICO 10.000 VELAS</h2>", unsafe_allow_html=True)
+st.title("📊 ANALISADOR DE VELAS")
 
 aba1, aba2 = st.tabs(["📥 MANUAL", "📸 PRINT"])
 
 with aba1:
-    manual = st.text_area("Ex: 1.25x 4.10x", height=100)
+    manual = st.text_area("Ex: 1.25x 4.10x")
 
 with aba2:
-    arquivo = st.file_uploader("", type=['png','jpg','jpeg'], label_visibility="collapsed")
+    arquivo = st.file_uploader("", type=['png','jpg','jpeg'])
 
+# ================================
+# PROCESSAMENTO
+# ================================
 if st.button("🚀 ADICIONAR", use_container_width=True):
-    texto_total = ""
-    if arquivo:
-        with st.spinner("Processando leitura reversa..."):
-            img = preprocessar(Image.open(arquivo))
-            res = reader.readtext(img)
-            texto_total += organizar_posicao_invertida(res)
-    if manual:
-        texto_total += " " + manual
 
-    if texto_total:
-        novas = extrair_velas(texto_total)
-        # Sincronização inteligente (Anti-duplicação)
-        ultimas_ref = st.session_state.velas[-30:]
-        final = [v for v in novas if v not in ultimas_ref]
+    texto = ""
+
+    if arquivo:
+        img = preprocessar(Image.open(arquivo))
+        res = reader.readtext(img, detail=1)
+        texto += organizar_por_posicao(res)
+
+    if manual:
+        texto += " " + manual
+
+    if texto:
+        novas = extrair_velas(texto)
+
+        # 🔥 ANTI DUPLICAÇÃO FORTE
+        ultimas = st.session_state.velas[-50:]
+        final = []
+
+        for v in novas:
+            if v not in ultimas:
+                final.append(v)
 
         if final:
             st.session_state.velas.extend(final)
-            st.session_state.velas = st.session_state.velas[-10000:]
+
+            # 🔥 LIMITADOR SEM PERDER DADOS ANTIGOS IMEDIATAMENTE
+            if len(st.session_state.velas) > MAX_VELAS:
+                st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
+
             salvar()
-            st.success(f"✅ {len(final)} velas inéditas adicionadas!")
+            st.success(f"{len(final)} velas adicionadas!")
             st.rerun()
         else:
-            st.warning("Nenhuma vela nova detectada.")
+            st.warning("Nada novo detectado")
 
 st.divider()
 
 # ================================
-# VISUALIZAÇÃO DO BANCO (SIMPLIFICADA PARA EVITAR ERRO)
+# HISTÓRICO (COMPLETO)
 # ================================
-st.subheader(f"📋 BANCO ({len(st.session_state.velas)}/10.000)")
+st.subheader("📋 HISTÓRICO")
 
 if st.session_state.velas:
-    # Exibimos a tabela sem o estilo map que causa erro em algumas versões do Streamlit
-    df_banco = pd.DataFrame({"Vela": [f"{v:.2f}x" for v in st.session_state.velas[::-1]]})
-    st.dataframe(df_banco, use_container_width=True, height=400)
+    df = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
+
+    st.dataframe(
+        df.style.format("{:.2f}x"),
+        use_container_width=True,
+        height=400
+    )
 
 st.divider()
 
 # ================================
-# ÚLTIMAS 20 (RODAPÉ COLORIDO)
+# 🔥 ÚLTIMAS 20 CORRIGIDO
 # ================================
-st.subheader("📉 ÚLTIMAS 20 ADICIONADAS")
-if st.session_state.velas:
-    exibir_20 = st.session_state.velas[-20:][::-1]
-    chips = []
-    for v in exibir_20:
-        cor = "#FF00FF" if v >= 8.0 else "#00FF00" if v >= 2.0 else "#FFFFFF"
-        chips.append(f"<b style='color:{cor}; font-size:1.1em;'>{v:.2f}x</b>")
-    st.markdown(" , ".join(chips), unsafe_allow_html=True)
+st.subheader("📉 ÚLTIMAS 20")
 
-# RESET NA BARRA LATERAL
-if st.sidebar.checkbox("⚙️ Configurações"):
-    if st.sidebar.button("🗑️ Reset últimas 20"):
+if st.session_state.velas:
+    ultimas = st.session_state.velas[-20:][::-1]
+
+    texto = [
+        f"<b style='color:{'#FF00FF' if v >= 8 else '#00FF00' if v >= 2 else '#FFFFFF'}'>{v:.2f}x</b>"
+        for v in ultimas if v > 0
+    ]
+
+    st.markdown(" , ".join(texto), unsafe_allow_html=True)
+
+st.divider()
+
+# ================================
+# RESET (OPCIONAL)
+# ================================
+if st.checkbox("Reset"):
+
+    if st.button("Apagar últimas 20"):
         st.session_state.velas = st.session_state.velas[:-20]
-        salvar(); st.rerun()
-    if st.sidebar.button("🔥 Zerar Tudo"):
-        if os.path.exists(DB_FILE): os.remove(DB_FILE)
-        st.session_state.velas = []; st.rerun()
+        salvar()
+        st.rerun()
+
+    if st.button("Zerar tudo"):
+        if os.path.exists(DB_FILE):
+            os.remove(DB_FILE)
+        st.session_state.velas = []
+        st.rerun()
