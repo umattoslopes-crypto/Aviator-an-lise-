@@ -7,24 +7,21 @@ import easyocr
 import numpy as np
 
 # --- 1. BANCO DE DADOS (BLINDADO CONTRA VAZIOS) ---
-DB_FILE = "banco_dados_fiel.csv"
+DB_FILE = "banco_velas_projeto.csv"
 
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
-            # Carrega e remove IMEDIATAMENTE qualquer linha vazia ou erro
+            # Carrega e limpa IMEDIATAMENTE qualquer valor que não seja número
             df_load = pd.read_csv(DB_FILE)
             st.session_state.velas = [float(v) for v in df_load['velas'].dropna().tolist() if v > 0]
-        except: 
-            st.session_state.velas = []
-    else:
-        st.session_state.velas = []
+        except: st.session_state.velas = []
+    else: st.session_state.velas = []
 
 def salvar():
-    # Só salva se houver velas e garante que não salva valores nulos
+    # Salva apenas se houver velas reais
     if st.session_state.velas:
-        velas_limpas = [v for v in st.session_state.velas if v > 0]
-        pd.DataFrame({'velas': velas_limpas}).to_csv(DB_FILE, index=False)
+        pd.DataFrame({'velas': st.session_state.velas}).to_csv(DB_FILE, index=False)
 
 @st.cache_resource
 def load_reader():
@@ -53,18 +50,18 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
         texto_bruto += " " + manual_txt
 
     if texto_bruto:
-        # REGRA DE OURO: Só captura o número que tiver um X ou x colado nele
+        # REGRA: Só captura números que tenham um 'x' ou 'X' colado
         encontrados = re.findall(r"(\d+\.\d+|\d+)[xX]", texto_bruto.replace(',', '.'))
         
-        # Converte para float e ignora horários (0.36, etc)
         novas = []
         for v in encontrados:
             try:
                 val = float(v)
-                if val not in [0.36, 22.18, 0.35, 0.37]: # Filtra horários do print
-                    novas.append(val)
-            except:
-                continue
+                # BLOQUEIO DE HORÁRIOS DO CELULAR E RUÍDO (0.38, 0.40, etc)
+                if val in [0.38, 0.39, 0.40, 22.18, 0.24, 32.18]:
+                    continue
+                novas.append(val)
+            except: continue
         
         if novas:
             # Sincronização (Anti-duplicação)
@@ -110,7 +107,7 @@ st.divider()
 # --- 3. HISTÓRICO (TOTALMENTE COMPACTADO) ---
 st.subheader("📋 HISTORICO DE VELAS")
 if st.session_state.velas:
-    # FILTRO RADICAL: Remove nulos e zeros na visualização
+    # FILTRO RADICAL: Só mostra o que for número real e maior que zero
     velas_exibir = [v for v in st.session_state.velas[::-1] if v > 0]
     df = pd.DataFrame({"Vela": velas_exibir})
     st.dataframe(
@@ -123,7 +120,7 @@ st.divider()
 # --- 4. RODAPÉ: ÚLTIMAS 20 (SEM VÍRGULAS VAZIAS) ---
 st.subheader("📉 ULTIMA 20 VELA ADICIONADA")
 if st.session_state.velas:
-    # Só pega números reais para evitar as vírgulas sozinhas do seu print
+    # Garante que não existem vírgulas sem números
     ultimas_reais = [v for v in st.session_state.velas[-20:][::-1] if v > 0]
     resumo = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in ultimas_reais]
     st.markdown(" , ".join(resumo), unsafe_allow_html=True)
