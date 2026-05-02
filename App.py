@@ -6,21 +6,21 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# --- 1. BANCO DE DADOS (LIMPEZA AUTOMÁTICA) ---
-DB_FILE = "banco_velas_projeto.csv"
+# --- 1. BANCO DE DADOS (PERSISTENTE) ---
+DB_FILE = "banco_dados_fiel.csv"
 
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
-            # Carrega e já remove qualquer valor vazio (NaN) que possa ter entrado
             df_load = pd.read_csv(DB_FILE)
-            st.session_state.velas = [v for v in df_load['velas'].tolist() if pd.notnull(v)]
+            st.session_state.velas = [float(v) for v in df_load['velas'].dropna().tolist()]
         except: st.session_state.velas = []
-    else: st.session_state.velas = []
+    else:
+        st.session_state.velas = []
 
 def salvar():
-    # Salva apenas valores reais, garantindo que o banco não suje
-    pd.DataFrame({'velas': [v for v in st.session_state.velas if v]}).to_csv(DB_FILE, index=False)
+    if st.session_state.velas:
+        pd.DataFrame({'velas': st.session_state.velas}).to_csv(DB_FILE, index=False)
 
 @st.cache_resource
 def load_reader():
@@ -34,7 +34,7 @@ st.markdown("<h2 style='text-align: center;'>ATE 500 VELAS</h2>", unsafe_allow_h
 aba_manual, aba_print = st.tabs(["📥 MANUAL", "📸 PRINT"])
 
 with aba_manual:
-    manual_txt = st.text_area("Exemplo: 1.25x 4.10x", height=100)
+    manual_txt = st.text_area("Exemplo: 1.25x 4.10x 5.00x", height=100)
 
 with aba_print:
     arquivo = st.file_uploader("Suba o print aqui", type=['png', 'jpg', 'jpeg'], label_visibility="collapsed")
@@ -49,13 +49,12 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
         texto_bruto += " " + manual_txt
 
     if texto_bruto:
-        # REGRA: Só captura números que tenham um 'x' ou 'X' grudado
+        # A REGRA: Captura apenas números que tenham 'x' ou 'X' grudados (ex: 2.50x)
         encontrados = re.findall(r"(\d+\.\d+|\d+)[xX]", texto_bruto.replace(',', '.'))
-        # Converte para float e ignora horários como 0.29 ou 22.18
-        novas = [float(v) for v in encontrados if float(v) not in [0.29, 22.18, 0.22, 0.24, 0.25]]
+        novas = [float(v) for v in encontrados]
         
         if novas:
-            # Anti-duplicação (Sincronização)
+            # Sincronização (Anti-duplicação)
             ultimas = st.session_state.velas[-15:]
             ponto = 0
             for i in range(len(novas)):
@@ -71,7 +70,7 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
 
 st.divider()
 
-# --- BUSCA DE PADRÃO ---
+# --- 2. BUSCA DE PADRÃO ---
 st.subheader("🔍 BUSCA DE PADRAO")
 col_in, col_bt = st.columns([0.85, 0.15])
 with col_in:
@@ -96,11 +95,11 @@ with col_bt:
 
 st.divider()
 
-# --- HISTÓRICO (SEM LINHAS VAZIAS) ---
+# --- 3. HISTÓRICO (SEM LINHAS VAZIAS) ---
 st.subheader("📋 HISTORICO DE VELAS")
 if st.session_state.velas:
-    # Garante que não existam valores nulos na tabela
-    df = pd.DataFrame({"Vela": [v for v in st.session_state.velas[::-1] if v]})
+    # Exibe apenas valores reais (ordem inversa)
+    df = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
     st.dataframe(
         df.style.map(lambda x: 'color: #FF00FF; font-weight: bold' if x >= 8.0 else 'color: white').format("{:.2f}x"),
         use_container_width=True, height=400
@@ -108,12 +107,10 @@ if st.session_state.velas:
 
 st.divider()
 
-# --- RODAPÉ: ÚLTIMAS 20 (LIMPO) ---
+# --- 4. RODAPÉ: ÚLTIMAS 20 (COMPACTADO) ---
 st.subheader("📉 ULTIMA 20 VELA ADICIONADA")
 if st.session_state.velas:
-    # Filtra apenas velas válidas para não aparecer vírgulas vazias
-    velas_validas = [v for v in st.session_state.velas[-20:][::-1] if v]
-    resumo = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in velas_validas]
+    resumo = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in st.session_state.velas[-20:][::-1]]
     st.markdown(" , ".join(resumo), unsafe_allow_html=True)
 
 # RESET
