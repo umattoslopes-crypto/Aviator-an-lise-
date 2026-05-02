@@ -6,19 +6,21 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# --- 1. PERSISTÊNCIA ---
+# --- 1. BANCO DE DADOS (LIMPEZA AUTOMÁTICA) ---
 DB_FILE = "banco_velas_projeto.csv"
 
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
-            st.session_state.velas = pd.read_csv(DB_FILE)['velas'].tolist()
+            # Carrega e já remove qualquer valor vazio (NaN) que possa ter entrado
+            df_load = pd.read_csv(DB_FILE)
+            st.session_state.velas = [v for v in df_load['velas'].tolist() if pd.notnull(v)]
         except: st.session_state.velas = []
-    else:
-        st.session_state.velas = []
+    else: st.session_state.velas = []
 
 def salvar():
-    pd.DataFrame({'velas': st.session_state.velas}).to_csv(DB_FILE, index=False)
+    # Salva apenas valores reais, garantindo que o banco não suje
+    pd.DataFrame({'velas': [v for v in st.session_state.velas if v]}).to_csv(DB_FILE, index=False)
 
 @st.cache_resource
 def load_reader():
@@ -26,39 +28,34 @@ def load_reader():
 
 reader = load_reader()
 
-# --- LAYOUT FIEL AO DESENHO ---
+# --- LAYOUT FIEL AO SEU DESENHO ---
 st.markdown("<h2 style='text-align: center;'>ATE 500 VELAS</h2>", unsafe_allow_html=True)
 
-aba_manual, aba_print = st.tabs(["📥 INSERIR MANUAL", "📸 INSERIR ATRAVÉS PRINT"])
+aba_manual, aba_print = st.tabs(["📥 MANUAL", "📸 PRINT"])
 
 with aba_manual:
-    manual_txt = st.text_area("Exemplo: 1.25x 4.10x 5.00x", placeholder="Digite as velas aqui...", height=100)
+    manual_txt = st.text_area("Exemplo: 1.25x 4.10x", height=100)
 
 with aba_print:
-    arquivo = st.file_uploader("Anexe o print aqui", type=['png', 'jpg', 'jpeg'], label_visibility="collapsed")
+    arquivo = st.file_uploader("Suba o print aqui", type=['png', 'jpg', 'jpeg'], label_visibility="collapsed")
 
 if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
     texto_bruto = ""
     if arquivo:
-        with st.spinner("Lendo print..."):
-            img = Image.open(arquivo)
-            res = reader.readtext(np.array(img), detail=0)
+        with st.spinner("Lendo..."):
+            res = reader.readtext(np.array(Image.open(arquivo)), detail=0)
             texto_bruto = " ".join(res)
     if manual_txt:
         texto_bruto += " " + manual_txt
 
     if texto_bruto:
-        # A MÁGICA: Busca apenas números que tenham um 'x' ou 'X' logo depois
-        # Ex: "2.34x", "10x", "1.05X"
+        # REGRA: Só captura números que tenham um 'x' ou 'X' grudado
         encontrados = re.findall(r"(\d+\.\d+|\d+)[xX]", texto_bruto.replace(',', '.'))
-        novas = []
-        for item in encontrados:
-            try:
-                novas.append(float(item))
-            except: continue
+        # Converte para float e ignora horários como 0.29 ou 22.18
+        novas = [float(v) for v in encontrados if float(v) not in [0.29, 22.18, 0.22, 0.24, 0.25]]
         
         if novas:
-            # Sincronização (Anti-duplicação)
+            # Anti-duplicação (Sincronização)
             ultimas = st.session_state.velas[-15:]
             ponto = 0
             for i in range(len(novas)):
@@ -69,73 +66,67 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
             if final:
                 st.session_state.velas.extend(final)
                 salvar()
-                st.success(f"✅ {len(final)} velas detectadas com 'x' adicionadas!")
+                st.success(f"✅ {len(final)} velas adicionadas!")
                 st.rerun()
-            else:
-                st.info("Essas velas já estão no histórico.")
-        else:
-            st.warning("Nenhuma vela com 'x' foi encontrada no print.")
 
 st.divider()
 
-# --- 2. BUSCA DE PADRÃO ---
+# --- BUSCA DE PADRÃO ---
 st.subheader("🔍 BUSCA DE PADRAO")
 col_in, col_bt = st.columns([0.85, 0.15])
 with col_in:
-    seq_alvo = st.text_input("Padrao de 10 velas:", placeholder="Ex: 1.25 2.00...", label_visibility="collapsed")
+    seq_alvo = st.text_input("Padrao de 10 velas:", placeholder="Ex: 1.25 2.00...")
 with col_bt:
-    buscar = st.button("🔎")
-
-if buscar and seq_alvo:
-    try:
-        padrao = [float(x.strip()) for x in seq_alvo.replace(',', ' ').replace('x', '').replace('X', '').split() if x.strip()]
-        hist = st.session_state.velas
-        achou = False
-        for i in range(len(hist) - len(padrao)):
-            if hist[i : i + len(padrao)] == padrao:
-                achou = True
-                st.success(f"🎯 PADRÃO ENCONTRADO!")
-                proximas = hist[i + len(padrao) : i + len(padrao) + 15]
-                if proximas:
-                    st.warning("⚠️ PRÓXIMAS 15 VELAS:")
-                    fmt = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in proximas]
-                    st.markdown(" &nbsp; ".join(fmt), unsafe_allow_html=True)
-        if not achou: st.error("Não encontrado.")
-    except: st.error("Erro no formato.")
+    if st.button("🔎"):
+        if seq_alvo:
+            # Limpa o input para buscar apenas os números
+            padrao = [float(x.strip()) for x in seq_alvo.replace(',', ' ').replace('x', '').replace('X', '').split() if x.strip()]
+            hist = st.session_state.velas
+            achou = False
+            for i in range(len(hist) - len(padrao)):
+                if hist[i : i + len(padrao)] == padrao:
+                    achou = True
+                    st.success(f"🎯 ENCONTRADO!")
+                    futuro = hist[i + len(padrao) : i + len(padrao) + 15]
+                    if futuro:
+                        st.warning("⚠️ PRÓXIMAS 15 VELAS:")
+                        fmt = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in futuro]
+                        st.markdown(" , ".join(fmt), unsafe_allow_html=True)
+            if not achou: st.error("Não encontrado.")
 
 st.divider()
 
-# --- 3. HISTÓRICO DE VELAS ---
+# --- HISTÓRICO (SEM LINHAS VAZIAS) ---
 st.subheader("📋 HISTORICO DE VELAS")
 if st.session_state.velas:
-    df = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
+    # Garante que não existam valores nulos na tabela
+    df = pd.DataFrame({"Vela": [v for v in st.session_state.velas[::-1] if v]})
     st.dataframe(
         df.style.map(lambda x: 'color: #FF00FF; font-weight: bold' if x >= 8.0 else 'color: white').format("{:.2f}x"),
-        use_container_width=True, height=350
+        use_container_width=True, height=400
     )
 
 st.divider()
 
-# --- 4. ÚLTIMA 20 VELA ADICIONADA ---
+# --- RODAPÉ: ÚLTIMAS 20 (LIMPO) ---
 st.subheader("📉 ULTIMA 20 VELA ADICIONADA")
 if st.session_state.velas:
-    ultimas_20 = st.session_state.velas[-20:][::-1]
-    resumo = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in ultimas_20]
-    st.markdown(" &nbsp; ".join(resumo), unsafe_allow_html=True)
+    # Filtra apenas velas válidas para não aparecer vírgulas vazias
+    velas_validas = [v for v in st.session_state.velas[-20:][::-1] if v]
+    resumo = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in velas_validas]
+    st.markdown(" , ".join(resumo), unsafe_allow_html=True)
 
+# RESET
 st.divider()
-
-# --- 5. SEÇÃO DE RESET ---
-st.subheader("⚙️ RESETAR")
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("🗑️ RESETAR ÚLTIMA 20 VELAS", use_container_width=True):
-        st.session_state.velas = st.session_state.velas[:-20]
-        salvar()
-        st.rerun()
-with c2:
-    if st.checkbox("Confirmar reset total"):
-        if st.button("🔥 RESETAR TUDO", use_container_width=True):
+if st.checkbox("Liberar Reset"):
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🗑️ APAGAR ÚLTIMAS 20"):
+            st.session_state.velas = st.session_state.velas[:-20]
+            salvar()
+            st.rerun()
+    with c2:
+        if st.button("🔥 ZERAR TUDO"):
             if os.path.exists(DB_FILE): os.remove(DB_FILE)
             st.session_state.velas = []
             st.rerun()
