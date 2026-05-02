@@ -2,22 +2,26 @@ import streamlit as st
 import pandas as pd
 import os
 import re
-from PIL import Image
+from PIL import Image, ImageOps
 import easyocr
 import numpy as np
+import cv2
 
+# Configurações de arquivo
 DB_FILE = "banco_velas_projeto.csv"
 MAX_VELAS = 10000
 MAX_POR_ENVIO = 500
 
 # =========================
-# BANCO
+# BANCO DE DADOS
 # =========================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
             df = pd.read_csv(DB_FILE)
-            st.session_state.velas = [float(v) for v in df['velas'].dropna() if float(v) > 0]
+            st.session_state.velas = [
+                float(v) for v in df['velas'].dropna() if float(v) > 0
+            ]
         except:
             st.session_state.velas = []
     else:
@@ -27,200 +31,174 @@ def salvar():
     pd.DataFrame({'velas': st.session_state.velas[-MAX_VELAS:]}).to_csv(DB_FILE, index=False)
 
 # =========================
-# OCR
+# OCR E PROCESSAMENTO
 # =========================
 @st.cache_resource
 def load_reader():
+    # Carrega o modelo uma vez para ganhar performance
     return easyocr.Reader(['en'], gpu=False)
 
 reader = load_reader()
 
 def preprocessar(img):
-    img = img.convert('L')
-    img = np.array(img)
-    img = np.where(img > 130, 255, 0).astype(np.uint8)
-    return img
+    """
+    Melhoria crucial: Converte para cinza e aplica threshold adaptativo
+    para capturar velas de cores claras (cinza/branco) que o OCR ignorava.
+    """
+    img = ImageOps.grayscale(img)
+    img_np = np.array(img)
+    
+    # Aplica um filtro de nitidez e binarização adaptativa
+    # Isso ajuda a destacar números baixos que costumam ser cinza claro
+    img_bin = cv2.adaptiveThreshold(
+        img_np, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 31, 2
+    )
+    return img_bin
 
-# =========================
-# ORGANIZAÇÃO POR POSIÇÃO (FUNCIONA NO SEU PRINT)
-# =========================
 def organizar_por_posicao(res):
-    itens = []
-
+    """
+    Agrupa os textos detectados por linhas horizontais e 
+    ordena da direita para a esquerda (como no histórico dos jogos).
+    """
+    linhas = []
     for (bbox, texto, conf) in res:
         texto = texto.strip().lower()
-
-        if 'x' not in texto:
+        
+        # Ignora textos muito curtos ou que claramente não são números
+        if len(texto) < 1:
             continue
 
-        x = bbox[0][0]
-        y = bbox[0][1]
+        y_topo = bbox[0][1]
+        x_esq = bbox[0][0]
 
-        itens.append((y, x, texto))
+        colocado = False
+        for linha in linhas:
+            # Se a diferença de altura for pequena, pertence à mesma linha
+            if abs(linha['y'] - y_topo) < 25:
+                linha['itens'].append((x_esq, texto))
+                colocado = True
+                break
 
-    # 🔥 ordem fiel ao print
-    itens.sort(key=lambda i: (-i[0], -i[1]))
+        if not colocado:
+            linhas.append({'y': y_topo, 'itens': [(x_esq, texto)]})
 
-    return [i[2] for i in itens]
+    # Ordena linhas de baixo para cima (mais recentes primeiro dependendo do print)
+    linhas.sort(key=lambda l: l['y'])
 
-# =========================
-# EXTRAÇÃO ULTRA ROBUSTA (NÃO PERDE NENHUMA)
-# =========================
+    resultado = []
+    for linha in linhas:
+        # Ordena itens da linha da direita para a esquerda
+        linha['itens'].sort(key=lambda i: i[0], reverse=True)
+        for _, texto in linha['itens']:
+            resultado.append(texto)
+
+    return resultado
+
 def extrair_velas(lista_textos):
-    velas = []
-    buffer = ""
-
+    """
+    Extrai números decimais. Agora aceita números mesmo sem o 'x'
+    para garantir que velas baixas (1.00) sejam lidas.
+    """
+    velas_extraidas = []
     for texto in lista_textos:
-        texto = texto.replace(',', '.').strip()
-
-        buffer += " " + texto
-
-        encontrados = re.findall(r"\d+(?:\.\d+)?x", buffer)
-
-        for item in encontrados:
+        # Limpa o texto: troca vírgula por ponto e remove letras indesejadas
+        texto_limpo = texto.replace(',', '.').replace('s', '5').replace('o', '0')
+        
+        # Regex busca: números com ou sem decimais, seguidos ou não de 'x'
+        matches = re.findall(r"(\d+(?:\.\d+)?)\s*x?", texto_limpo)
+        
+        for m in matches:
             try:
-                val = float(item.replace('x', ''))
-                if val > 0:
-                    velas.append(val)
+                val = float(m)
+                if 1.0 <= val <= 10000.0:
+                    velas_extraidas.append(val)
             except:
                 continue
-
-        # evita duplicação infinita
-        if len(buffer) > 60:
-            buffer = buffer[-25:]
-
-    return velas
+    return velas_extraidas
 
 # =========================
-# INTERFACE
+# INTERFACE STREAMLIT
 # =========================
-st.title("📊 ANALISADOR DE VELAS (PRECISO)")
+st.set_page_config(page_title="Analisador de Velas", layout="centered")
+st.title("📊 ANALISADOR DE VELAS (OCR)")
 
-aba1, aba2 = st.tabs(["📥 MANUAL", "📸 PRINT"])
+aba1, aba2 = st.tabs(["📸 PRINT DO HISTÓRICO", "📥 ADICIONAR MANUAL"])
 
 with aba1:
-    manual = st.text_area("Cole até 500 velas")
+    arquivo = st.file_uploader("Envie o print das velas", type=['png','jpg','jpeg'])
+    if arquivo:
+        st.image(arquivo, caption="Imagem carregada", use_container_width=True)
 
 with aba2:
-    arquivo = st.file_uploader("Envie o print", type=['png','jpg','jpeg'])
+    manual = st.text_area("Cole as velas separadas por espaço (Ex: 1.20 5.00 1.05)")
 
 # =========================
-# PROCESSAMENTO
+# BOTÃO DE PROCESSAMENTO
 # =========================
-if st.button("🚀 ADICIONAR", use_container_width=True):
-
-    textos = []
+if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
+    novas_velas = []
 
     if arquivo:
-        img = preprocessar(Image.open(arquivo))
-        res = reader.readtext(img, detail=1)
-        textos = organizar_por_posicao(res)
-
+        with st.spinner("Lendo imagem..."):
+            img_processada = preprocessar(Image.open(arquivo))
+            resultado_ocr = reader.readtext(img_processada)
+            textos_ordenados = organizar_por_posicao(resultado_ocr)
+            novas_velas = extrair_velas(textos_ordenados)
+    
     if manual:
-        textos += manual.split()
+        novas_velas += extrair_velas(manual.split())
 
-    if textos:
-        novas = extrair_velas(textos)
+    if novas_velas:
+        # Evita duplicados em excesso e limita envio
+        novas_velas = novas_velas[:MAX_POR_ENVIO]
+        
+        for v in novas_velas:
+            st.session_state.velas.append(v)
 
-        if len(novas) > MAX_POR_ENVIO:
-            st.warning(f"{len(novas)} velas detectadas. Limitado a 500.")
-            novas = novas[:MAX_POR_ENVIO]
-
-        adicionadas = 0
-
-        for v in novas:
-            if v > 0:
-                st.session_state.velas.append(v)
-                adicionadas += 1
-
+        # Mantém apenas o limite do banco
         if len(st.session_state.velas) > MAX_VELAS:
             st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
 
         salvar()
-        st.success(f"{adicionadas} velas adicionadas!")
+        st.success(f"✅ {len(novas_velas)} velas adicionadas com sucesso!")
         st.rerun()
+    else:
+        st.error("Nenhuma vela detectada. Tente um print com mais zoom ou digite manual.")
 
 st.divider()
 
 # =========================
-# HISTÓRICO
+# VISUALIZAÇÃO E BUSCA
 # =========================
-st.subheader("📋 HISTÓRICO")
+col1, col2 = st.columns(2)
 
-if st.session_state.velas:
-    df = pd.DataFrame({"Vela": st.session_state.velas})
+with col1:
+    st.subheader("🔍 BUSCAR PADRÃO")
+    seq = st.text_input("Sequência (ex: 1.05 2.10)")
+    if st.button("🔎 BUSCAR"):
+        padrao = [float(x.replace(',', '.')) for x in seq.split()]
+        hist = st.session_state.velas
+        achou = False
+        for i in range(len(hist) - len(padrao)):
+            if hist[i:i+len(padrao)] == padrao:
+                achou = True
+                st.write(f"✅ Padrão encontrado! Próximas: **{hist[i+len(padrao):i+len(padrao)+3]}**")
+        if not achou: st.warning("Padrão não visto.")
 
-    def cor(v):
-        if v >= 8:
-            return "color:#FF00FF; font-weight:bold"
-        elif v >= 2:
-            return "color:#00FF00"
-        else:
-            return "color:white"
-
-    st.dataframe(
-        df.style.map(cor).format("{:.2f}x"),
-        use_container_width=True,
-        height=400
-    )
-
-st.divider()
-
-# =========================
-# ÚLTIMAS 20
-# =========================
-st.subheader("📉 ÚLTIMAS 20")
-
-if st.session_state.velas:
-    ultimas = st.session_state.velas[-20:]
-
-    texto = []
-    for v in ultimas:
-        cor = "#FF00FF" if v >= 8 else "#00FF00" if v >= 2 else "#FFFFFF"
-        texto.append(f"<b style='color:{cor}'>{v:.2f}x</b>")
-
-    st.markdown(" , ".join(texto), unsafe_allow_html=True)
-
-st.divider()
-
-# =========================
-# BUSCA
-# =========================
-st.subheader("🔍 BUSCA DE PADRÃO")
-
-seq = st.text_input("Ex: 1.25 2.00")
-
-if st.button("🔎 BUSCAR"):
-    if seq:
-        try:
-            padrao = [float(x) for x in seq.split()]
-            hist = st.session_state.velas
-
-            for i in range(len(hist) - len(padrao)):
-                if hist[i:i+len(padrao)] == padrao:
-                    st.success("Encontrado!")
-                    st.write(hist[i+len(padrao):i+len(padrao)+10])
-                    break
-            else:
-                st.error("Não encontrado")
-
-        except:
-            st.error("Erro no padrão")
-
-st.divider()
+with col2:
+    st.subheader("📋 ÚLTIMAS 10")
+    if st.session_state.velas:
+        ultimas = st.session_state.velas[-10:]
+        for v in reversed(ultimas):
+            cor = "#FF00FF" if v >= 10 else "#00FF00" if v >= 2 else "#FF4B4B"
+            st.markdown(f"<span style='color:{cor}; font-weight:bold; font-size:20px'>{v:.2f}x</span>", unsafe_allow_html=True)
 
 # =========================
 # RESET
 # =========================
-if st.checkbox("Reset"):
-
-    if st.button("Apagar últimas 20"):
-        st.session_state.velas = st.session_state.velas[:-20]
-        salvar()
-        st.rerun()
-
-    if st.button("Zerar tudo"):
-        if os.path.exists(DB_FILE):
-            os.remove(DB_FILE)
+with st.expander("⚙️ OPÇÕES DE BANCO"):
+    if st.button("🗑️ APAGAR TUDO"):
         st.session_state.velas = []
+        if os.path.exists(DB_FILE): os.remove(DB_FILE)
         st.rerun()
