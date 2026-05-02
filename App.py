@@ -5,6 +5,7 @@ import re
 from PIL import Image
 import easyocr
 import numpy as np
+import cv2
 
 DB_FILE = "banco_velas_projeto.csv"
 MAX_VELAS = 10000
@@ -17,9 +18,7 @@ if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
             df = pd.read_csv(DB_FILE)
-            st.session_state.velas = [
-                float(v) for v in df['velas'].dropna() if float(v) > 0
-            ]
+            st.session_state.velas = [float(v) for v in df['velas'].dropna() if float(v) > 0]
         except:
             st.session_state.velas = []
     else:
@@ -37,84 +36,75 @@ def load_reader():
 
 reader = load_reader()
 
-def preprocessar(img):
-    img = img.convert('L')
-    img = np.array(img)
-    img = np.where(img > 140, 255, 0).astype(np.uint8)
-    return img
+# =========================
+# 🔥 DETECÇÃO DE CÉLULAS
+# =========================
+def extrair_celulas(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # binarização forte
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+
+    # detectar linhas horizontais
+    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (50,1))
+    detect_h = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_h)
+
+    # detectar linhas verticais
+    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1,50))
+    detect_v = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_v)
+
+    grid = cv2.add(detect_h, detect_v)
+
+    # encontrar contornos (células)
+    contours, _ = cv2.findContours(grid, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    caixas = []
+
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+
+        # filtro de tamanho (ajuste fino)
+        if 30 < w < 200 and 20 < h < 100:
+            caixas.append((x, y, w, h))
+
+    # ordenação fiel ao print
+    caixas.sort(key=lambda b: (-b[1], -b[0]))
+
+    return caixas
 
 # =========================
-# ORGANIZAÇÃO
+# OCR EM CADA CÉLULA
 # =========================
-def organizar_por_posicao(res):
-    linhas = []
-
-    for (bbox, texto, conf) in res:
-        texto = texto.strip()
-
-        if 'x' not in texto.lower():
-            continue
-
-        x = bbox[0][0]
-        y = bbox[0][1]
-
-        colocado = False
-        for linha in linhas:
-            if abs(linha['y'] - y) < 22:
-                linha['itens'].append((x, texto))
-                colocado = True
-                break
-
-        if not colocado:
-            linhas.append({'y': y, 'itens': [(x, texto)]})
-
-    linhas.sort(key=lambda l: -l['y'])
-
-    resultado = []
-    for linha in linhas:
-        linha['itens'].sort(key=lambda i: -i[0])
-        for _, texto in linha['itens']:
-            resultado.append(texto)
-
-    return resultado
-
-# =========================
-# EXTRAÇÃO SEM PERDER NADA
-# =========================
-def extrair_velas(lista_textos):
+def ler_celulas(img, caixas):
     velas = []
-    buffer = ""
 
-    for texto in lista_textos:
-        texto = texto.lower().replace(',', '.').strip()
+    for (x, y, w, h) in caixas:
+        crop = img[y:y+h, x:x+w]
 
-        buffer += " " + texto
+        texto = reader.readtext(crop, detail=0)
+        texto = " ".join(texto).lower().replace(',', '.')
 
-        encontrados = re.findall(r"\d+(?:\.\d+)?x", buffer)
+        match = re.search(r"\d+(?:\.\d+)?x", texto)
 
-        for item in encontrados:
+        if match:
             try:
-                val = float(item.replace('x', ''))
+                val = float(match.group().replace('x', ''))
                 if val > 0:
                     velas.append(val)
             except:
                 continue
-
-        # limpa buffer parcialmente
-        if len(buffer) > 60:
-            buffer = buffer[-25:]
 
     return velas
 
 # =========================
 # INTERFACE
 # =========================
-st.title("📊 ANALISADOR DE VELAS")
+st.title("📊 ANALISADOR PROFISSIONAL DE VELAS")
 
 aba1, aba2 = st.tabs(["📥 MANUAL", "📸 PRINT"])
 
 with aba1:
-    manual = st.text_area("Cole até 500 velas: Ex: 1.25x 4.10x")
+    manual = st.text_area("Cole até 500 velas")
 
 with aba2:
     arquivo = st.file_uploader("Envie o print", type=['png','jpg','jpeg'])
@@ -124,69 +114,37 @@ with aba2:
 # =========================
 if st.button("🚀 ADICIONAR", use_container_width=True):
 
-    textos = []
+    novas = []
 
     if arquivo:
-        img = preprocessar(Image.open(arquivo))
-        res = reader.readtext(img, detail=1)
-        textos = organizar_por_posicao(res)
+        img_pil = Image.open(arquivo)
+        img = np.array(img_pil)
+
+        caixas = extrair_celulas(img)
+        novas = ler_celulas(img, caixas)
 
     if manual:
-        textos += manual.split()
+        manual_vals = re.findall(r"\d+(?:\.\d+)?", manual.replace(',', '.'))
+        novas += [float(v) for v in manual_vals]
 
-    if textos:
-        novas = extrair_velas(textos)
+    # limite 500
+    if len(novas) > MAX_POR_ENVIO:
+        st.warning(f"{len(novas)} velas detectadas. Limitado a 500.")
+        novas = novas[:MAX_POR_ENVIO]
 
-        # limite por envio
-        if len(novas) > MAX_POR_ENVIO:
-            st.warning(f"{len(novas)} velas detectadas. Limitado a 500.")
-            novas = novas[:MAX_POR_ENVIO]
+    adicionadas = 0
 
-        adicionadas = 0
+    for v in novas:
+        if v > 0:
+            st.session_state.velas.append(v)
+            adicionadas += 1
 
-        for v in novas:
-            if isinstance(v, (int, float)) and v > 0:
-                st.session_state.velas.append(v)
-                adicionadas += 1
+    if len(st.session_state.velas) > MAX_VELAS:
+        st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
 
-        if len(st.session_state.velas) > MAX_VELAS:
-            st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
-
-        salvar()
-        st.success(f"{adicionadas} velas adicionadas!")
-        st.rerun()
-
-st.divider()
-
-# =========================
-# BUSCA
-# =========================
-st.subheader("🔍 BUSCA DE PADRÃO")
-
-seq = st.text_input("Ex: 1.25 2.00 3.50")
-
-if st.button("🔎 BUSCAR"):
-    if seq:
-        try:
-            padrao = [float(x.replace(',', '.')) for x in seq.split()]
-            hist = st.session_state.velas
-
-            achou = False
-
-            for i in range(len(hist) - len(padrao)):
-                if hist[i:i+len(padrao)] == padrao:
-                    achou = True
-                    st.success("Padrão encontrado!")
-
-                    futuro = hist[i+len(padrao):i+len(padrao)+10]
-                    if futuro:
-                        st.write([f"{v:.2f}x" for v in futuro])
-
-            if not achou:
-                st.error("Não encontrado")
-
-        except:
-            st.error("Erro no padrão")
+    salvar()
+    st.success(f"{adicionadas} velas adicionadas!")
+    st.rerun()
 
 st.divider()
 
@@ -228,6 +186,32 @@ if st.session_state.velas:
         texto.append(f"<b style='color:{cor}'>{v:.2f}x</b>")
 
     st.markdown(" , ".join(texto), unsafe_allow_html=True)
+
+st.divider()
+
+# =========================
+# BUSCA
+# =========================
+st.subheader("🔍 BUSCA DE PADRÃO")
+
+seq = st.text_input("Ex: 1.25 2.00")
+
+if st.button("🔎 BUSCAR"):
+    if seq:
+        try:
+            padrao = [float(x) for x in seq.split()]
+            hist = st.session_state.velas
+
+            for i in range(len(hist) - len(padrao)):
+                if hist[i:i+len(padrao)] == padrao:
+                    st.success("Encontrado!")
+                    st.write(hist[i+len(padrao):i+len(padrao)+10])
+                    break
+            else:
+                st.error("Não encontrado")
+
+        except:
+            st.error("Erro no padrão")
 
 st.divider()
 
