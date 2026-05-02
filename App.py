@@ -7,7 +7,7 @@ import easyocr
 import numpy as np
 
 # ================================
-# BANCO DE DADOS (LIMITE 10.000)
+# BANCO DE DADOS (10.000 VELAS)
 # ================================
 DB_FILE = "banco_velas_projeto.csv"
 
@@ -40,12 +40,11 @@ def organizar_posicao_invertida(res):
     itens = []
     for (bbox, texto, conf) in res:
         if 'x' in texto.lower():
-            # Coordenadas: y (topo), x (esquerda)
+            # Coordenadas do polígono (y, x)
             y = bbox[0][1]
             x = bbox[0][0]
             itens.append((y, x, texto))
-
-    # LEITURA INVERTIDA: Ordena por Y (decrescente/baixo para cima) e X (decrescente/direita para esquerda)
+    # Ordena de baixo para cima (Y desc) e direita para esquerda (X desc)
     itens.sort(key=lambda i: (i[0], i[1]), reverse=True)
     return " ".join([i[2] for i in itens])
 
@@ -61,7 +60,7 @@ def extrair_velas(texto):
     return velas
 
 # ================================
-# INTERFACE
+# INTERFACE PRINCIPAL
 # ================================
 st.markdown("<h2 style='text-align: center;'>HISTÓRICO 10.000 VELAS</h2>", unsafe_allow_html=True)
 
@@ -76,17 +75,16 @@ with aba2:
 if st.button("🚀 ADICIONAR", use_container_width=True):
     texto_total = ""
     if arquivo:
-        with st.spinner("Lendo print invertido..."):
+        with st.spinner("Processando leitura reversa..."):
             img = preprocessar(Image.open(arquivo))
-            res = reader.readtext(img, detail=1)
+            res = reader.readtext(img)
             texto_total += organizar_posicao_invertida(res)
-
     if manual:
         texto_total += " " + manual
 
     if texto_total:
         novas = extrair_velas(texto_total)
-        # Sincronização: evita duplicados comparando com o final do banco
+        # Sincronização inteligente (Anti-duplicação)
         ultimas_ref = st.session_state.velas[-30:]
         final = [v for v in novas if v not in ultimas_ref]
 
@@ -94,52 +92,38 @@ if st.button("🚀 ADICIONAR", use_container_width=True):
             st.session_state.velas.extend(final)
             st.session_state.velas = st.session_state.velas[-10000:]
             salvar()
-            st.success(f"✅ {len(final)} novas velas adicionadas!")
+            st.success(f"✅ {len(final)} velas inéditas adicionadas!")
             st.rerun()
         else:
-            st.warning("Nada novo detectado")
+            st.warning("Nenhuma vela nova detectada.")
 
 st.divider()
 
 # ================================
-# BANCO COMPLETO (CORREÇÃO DO ERRO)
+# VISUALIZAÇÃO DO BANCO (SIMPLIFICADA PARA EVITAR ERRO)
 # ================================
 st.subheader(f"📋 BANCO ({len(st.session_state.velas)}/10.000)")
 
 if st.session_state.velas:
-    df_banco = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
-    
-    # Função robusta de cor para velas >= 8x
-    def aplicar_estilo(val):
-        num = float(val.replace('x', ''))
-        return 'color: #FF00FF; font-weight: bold' if num >= 8.0 else 'color: white'
-
-    # Correção do erro: usamos o método nativo de estilo formatado
-    df_styled = df_banco.style.format("{:.2f}x")
-    
-    # Tenta 'map' (novo Pandas) ou 'applymap' (antigo)
-    try:
-        df_styled = df_styled.map(aplicar_estilo)
-    except:
-        df_styled = df_styled.applymap(aplicar_estilo)
-
-    st.dataframe(df_styled, use_container_width=True, height=400)
+    # Exibimos a tabela sem o estilo map que causa erro em algumas versões do Streamlit
+    df_banco = pd.DataFrame({"Vela": [f"{v:.2f}x" for v in st.session_state.velas[::-1]]})
+    st.dataframe(df_banco, use_container_width=True, height=400)
 
 st.divider()
 
 # ================================
-# ÚLTIMAS 20 (RODAPÉ FIEL)
+# ÚLTIMAS 20 (RODAPÉ COLORIDO)
 # ================================
 st.subheader("📉 ÚLTIMAS 20 ADICIONADAS")
 if st.session_state.velas:
     exibir_20 = st.session_state.velas[-20:][::-1]
-    chips = [
-        f"<b style='color:{'#FF00FF' if v >= 8 else '#00FF00' if v >= 2 else '#FFFFFF'}'>{v:.2f}x</b>"
-        for v in exibir_20
-    ]
+    chips = []
+    for v in exibir_20:
+        cor = "#FF00FF" if v >= 8.0 else "#00FF00" if v >= 2.0 else "#FFFFFF"
+        chips.append(f"<b style='color:{cor}; font-size:1.1em;'>{v:.2f}x</b>")
     st.markdown(" , ".join(chips), unsafe_allow_html=True)
 
-# RESET
+# RESET NA BARRA LATERAL
 if st.sidebar.checkbox("⚙️ Configurações"):
     if st.sidebar.button("🗑️ Reset últimas 20"):
         st.session_state.velas = st.session_state.velas[:-20]
