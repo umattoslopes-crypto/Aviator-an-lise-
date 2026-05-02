@@ -6,15 +6,15 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# ================================
+# =========================
 # CONFIG
-# ================================
+# =========================
 DB_FILE = "banco_velas_projeto.csv"
 MAX_VELAS = 10000
 
-# ================================
-# BANCO (NÃO APAGA)
-# ================================
+# =========================
+# BANCO DE DADOS (SEGURO)
+# =========================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
@@ -29,13 +29,12 @@ if 'velas' not in st.session_state:
         st.session_state.velas = []
 
 def salvar():
-    if st.session_state.velas:
-        df = pd.DataFrame({'velas': st.session_state.velas[-MAX_VELAS:]})
-        df.to_csv(DB_FILE, index=False)
+    df = pd.DataFrame({'velas': st.session_state.velas[-MAX_VELAS:]})
+    df.to_csv(DB_FILE, index=False)
 
-# ================================
+# =========================
 # OCR
-# ================================
+# =========================
 @st.cache_resource
 def load_reader():
     return easyocr.Reader(['en'], gpu=False)
@@ -48,48 +47,57 @@ def preprocessar(img):
     img = np.where(img > 150, 255, 0).astype(np.uint8)
     return img
 
-# ================================
-# 🔥 ORGANIZAÇÃO FIEL AO PRINT
-# ================================
+# =========================
+# ORGANIZAÇÃO POR POSIÇÃO
+# =========================
 def organizar_por_posicao(res):
     linhas = []
 
     for (bbox, texto, conf) in res:
-        if 'x' in texto.lower():
-            x = bbox[0][0]
-            y = bbox[0][1]
+        texto = texto.strip().lower()
 
-            encontrou = False
-            for linha in linhas:
-                if abs(linha['y'] - y) < 25:
-                    linha['itens'].append((x, texto))
-                    encontrou = True
-                    break
+        if 'x' not in texto:
+            continue
 
-            if not encontrou:
-                linhas.append({'y': y, 'itens': [(x, texto)]})
+        x = bbox[0][0]
+        y = bbox[0][1]
 
-    # 🔥 baixo → cima
+        colocado = False
+
+        for linha in linhas:
+            if abs(linha['y'] - y) < 25:
+                linha['itens'].append((x, texto))
+                colocado = True
+                break
+
+        if not colocado:
+            linhas.append({'y': y, 'itens': [(x, texto)]})
+
+    # 🔥 BAIXO → CIMA
     linhas.sort(key=lambda l: -l['y'])
 
     resultado = []
 
     for linha in linhas:
-        # 🔥 direita → esquerda
+        # 🔥 DIREITA → ESQUERDA
         linha['itens'].sort(key=lambda i: -i[0])
 
-        for item in linha['itens']:
-            resultado.append(item[1])
+        for _, texto in linha['itens']:
+            resultado.append(texto)
 
     return resultado
 
+# =========================
+# EXTRAÇÃO INTELIGENTE
+# =========================
 def extrair_velas(lista_textos):
     velas = []
 
     for texto in lista_textos:
-        texto = texto.lower().replace(',', '.')
+        texto = texto.replace(',', '.').strip()
 
         match = re.search(r"\d+\.\d+x", texto)
+
         if match:
             try:
                 val = float(match.group().replace('x', ''))
@@ -102,9 +110,9 @@ def extrair_velas(lista_textos):
 
     return velas
 
-# ================================
+# =========================
 # INTERFACE
-# ================================
+# =========================
 st.title("📊 ANALISADOR DE VELAS")
 
 aba1, aba2 = st.tabs(["📥 MANUAL", "📸 PRINT"])
@@ -115,30 +123,30 @@ with aba1:
 with aba2:
     arquivo = st.file_uploader("", type=['png','jpg','jpeg'])
 
-# ================================
+# =========================
 # PROCESSAMENTO
-# ================================
+# =========================
 if st.button("🚀 ADICIONAR", use_container_width=True):
 
-    texto_lista = []
+    textos = []
 
     if arquivo:
         img = preprocessar(Image.open(arquivo))
         res = reader.readtext(img, detail=1)
-        texto_lista = organizar_por_posicao(res)
+        textos = organizar_por_posicao(res)
 
     if manual:
-        texto_lista += manual.split()
+        textos += manual.split()
 
-    if texto_lista:
-        novas = extrair_velas(texto_lista)
+    if textos:
+        novas = extrair_velas(textos)
 
-        # anti lixo
+        # adiciona sem lixo
         for v in novas:
             if isinstance(v, (int, float)) and v > 0:
                 st.session_state.velas.append(v)
 
-        # limite 10k
+        # limite de 10k
         if len(st.session_state.velas) > MAX_VELAS:
             st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
 
@@ -148,54 +156,50 @@ if st.button("🚀 ADICIONAR", use_container_width=True):
 
 st.divider()
 
-# ================================
+# =========================
 # HISTÓRICO COLORIDO
-# ================================
+# =========================
 st.subheader("📋 HISTÓRICO")
 
 if st.session_state.velas:
     df = pd.DataFrame({"Vela": st.session_state.velas})
 
-    def colorir(val):
+    def cor(val):
         if val >= 8:
-            return "color: #FF00FF; font-weight: bold"
+            return "color:#FF00FF; font-weight:bold"
         elif val >= 2:
-            return "color: #00FF00"
+            return "color:#00FF00"
         else:
-            return "color: white"
+            return "color:white"
 
     st.dataframe(
-        df.style.map(colorir).format("{:.2f}x"),
+        df.style.map(cor).format("{:.2f}x"),
         use_container_width=True,
         height=400
     )
 
 st.divider()
 
-# ================================
-# ÚLTIMAS 20 (SEM ERRO)
-# ================================
+# =========================
+# ÚLTIMAS 20 (PERFEITO)
+# =========================
 st.subheader("📉 ÚLTIMAS 20")
 
 if st.session_state.velas:
-    ultimas = [
-        v for v in st.session_state.velas[-20:]
-        if isinstance(v, (int, float)) and v > 0
-    ]
+    ultimas = [v for v in st.session_state.velas[-20:] if v > 0]
 
-    if ultimas:
-        texto = []
-        for v in ultimas:
-            cor = "#FF00FF" if v >= 8 else "#00FF00" if v >= 2 else "#FFFFFF"
-            texto.append(f"<b style='color:{cor}'>{v:.2f}x</b>")
+    texto = []
+    for v in ultimas:
+        cor = "#FF00FF" if v >= 8 else "#00FF00" if v >= 2 else "#FFFFFF"
+        texto.append(f"<b style='color:{cor}'>{v:.2f}x</b>")
 
-        st.markdown(" , ".join(texto), unsafe_allow_html=True)
+    st.markdown(" , ".join(texto), unsafe_allow_html=True)
 
 st.divider()
 
-# ================================
+# =========================
 # RESET
-# ================================
+# =========================
 if st.checkbox("Reset"):
 
     if st.button("Apagar últimas 20"):
