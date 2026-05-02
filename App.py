@@ -6,9 +6,6 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# =========================
-# CONFIG
-# =========================
 DB_FILE = "banco_velas_projeto.csv"
 MAX_VELAS = 10000
 MAX_POR_ENVIO = 500
@@ -47,13 +44,14 @@ def preprocessar(img):
     return img
 
 # =========================
-# ORGANIZAÇÃO POR LINHA (PRECISO)
+# ORGANIZAÇÃO
 # =========================
 def organizar_por_posicao(res):
     linhas = []
 
     for (bbox, texto, conf) in res:
         texto = texto.strip()
+
         if 'x' not in texto.lower():
             continue
 
@@ -62,7 +60,7 @@ def organizar_por_posicao(res):
 
         colocado = False
         for linha in linhas:
-            if abs(linha['y'] - y) < 22:  # tolerância vertical ajustada
+            if abs(linha['y'] - y) < 22:
                 linha['itens'].append((x, texto))
                 colocado = True
                 break
@@ -70,12 +68,10 @@ def organizar_por_posicao(res):
         if not colocado:
             linhas.append({'y': y, 'itens': [(x, texto)]})
 
-    # baixo → cima
     linhas.sort(key=lambda l: -l['y'])
 
     resultado = []
     for linha in linhas:
-        # direita → esquerda
         linha['itens'].sort(key=lambda i: -i[0])
         for _, texto in linha['itens']:
             resultado.append(texto)
@@ -83,24 +79,30 @@ def organizar_por_posicao(res):
     return resultado
 
 # =========================
-# EXTRAÇÃO (SEM PERDER VALORES)
+# EXTRAÇÃO SEM PERDER NADA
 # =========================
 def extrair_velas(lista_textos):
     velas = []
+    buffer = ""
 
     for texto in lista_textos:
         texto = texto.lower().replace(',', '.').strip()
 
-        # pega número mesmo com sujeira
-        match = re.search(r"\d+(?:\.\d+)?x", texto)
+        buffer += " " + texto
 
-        if match:
+        encontrados = re.findall(r"\d+(?:\.\d+)?x", buffer)
+
+        for item in encontrados:
             try:
-                val = float(match.group().replace('x', ''))
+                val = float(item.replace('x', ''))
                 if val > 0:
                     velas.append(val)
             except:
                 continue
+
+        # limpa buffer parcialmente
+        if len(buffer) > 60:
+            buffer = buffer[-25:]
 
     return velas
 
@@ -135,9 +137,9 @@ if st.button("🚀 ADICIONAR", use_container_width=True):
     if textos:
         novas = extrair_velas(textos)
 
-        # 🔥 LIMITE DE 500
+        # limite por envio
         if len(novas) > MAX_POR_ENVIO:
-            st.warning(f"{len(novas)} velas detectadas. Limitado a 500 por envio.")
+            st.warning(f"{len(novas)} velas detectadas. Limitado a 500.")
             novas = novas[:MAX_POR_ENVIO]
 
         adicionadas = 0
@@ -147,7 +149,6 @@ if st.button("🚀 ADICIONAR", use_container_width=True):
                 st.session_state.velas.append(v)
                 adicionadas += 1
 
-        # limite histórico
         if len(st.session_state.velas) > MAX_VELAS:
             st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
 
@@ -190,7 +191,7 @@ if st.button("🔎 BUSCAR"):
 st.divider()
 
 # =========================
-# HISTÓRICO COLORIDO
+# HISTÓRICO
 # =========================
 st.subheader("📋 HISTÓRICO")
 
