@@ -6,21 +6,25 @@ from PIL import Image
 import easyocr
 import numpy as np
 
-# --- 1. BANCO DE DADOS (PERSISTENTE) ---
+# --- 1. BANCO DE DADOS (BLINDADO CONTRA VAZIOS) ---
 DB_FILE = "banco_dados_fiel.csv"
 
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
+            # Carrega e remove IMEDIATAMENTE qualquer linha vazia ou erro
             df_load = pd.read_csv(DB_FILE)
-            st.session_state.velas = [float(v) for v in df_load['velas'].dropna().tolist()]
-        except: st.session_state.velas = []
+            st.session_state.velas = [float(v) for v in df_load['velas'].dropna().tolist() if v > 0]
+        except: 
+            st.session_state.velas = []
     else:
         st.session_state.velas = []
 
 def salvar():
+    # Só salva se houver velas e garante que não salva valores nulos
     if st.session_state.velas:
-        pd.DataFrame({'velas': st.session_state.velas}).to_csv(DB_FILE, index=False)
+        velas_limpas = [v for v in st.session_state.velas if v > 0]
+        pd.DataFrame({'velas': velas_limpas}).to_csv(DB_FILE, index=False)
 
 @st.cache_resource
 def load_reader():
@@ -34,7 +38,7 @@ st.markdown("<h2 style='text-align: center;'>ATE 500 VELAS</h2>", unsafe_allow_h
 aba_manual, aba_print = st.tabs(["📥 MANUAL", "📸 PRINT"])
 
 with aba_manual:
-    manual_txt = st.text_area("Exemplo: 1.25x 4.10x 5.00x", height=100)
+    manual_txt = st.text_area("Exemplo: 1.25x 4.10x", height=100)
 
 with aba_print:
     arquivo = st.file_uploader("Suba o print aqui", type=['png', 'jpg', 'jpeg'], label_visibility="collapsed")
@@ -49,9 +53,18 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
         texto_bruto += " " + manual_txt
 
     if texto_bruto:
-        # A REGRA: Captura apenas números que tenham 'x' ou 'X' grudados (ex: 2.50x)
+        # REGRA DE OURO: Só captura o número que tiver um X ou x colado nele
         encontrados = re.findall(r"(\d+\.\d+|\d+)[xX]", texto_bruto.replace(',', '.'))
-        novas = [float(v) for v in encontrados]
+        
+        # Converte para float e ignora horários (0.36, etc)
+        novas = []
+        for v in encontrados:
+            try:
+                val = float(v)
+                if val not in [0.36, 22.18, 0.35, 0.37]: # Filtra horários do print
+                    novas.append(val)
+            except:
+                continue
         
         if novas:
             # Sincronização (Anti-duplicação)
@@ -78,8 +91,7 @@ with col_in:
 with col_bt:
     if st.button("🔎"):
         if seq_alvo:
-            # Limpa o input para buscar apenas os números
-            padrao = [float(x.strip()) for x in seq_alvo.replace(',', ' ').replace('x', '').replace('X', '').split() if x.strip()]
+            padrao = [float(x.strip()) for x in seq_alvo.replace(',', ' ').replace('x','').split() if x.strip()]
             hist = st.session_state.velas
             achou = False
             for i in range(len(hist) - len(padrao)):
@@ -95,11 +107,12 @@ with col_bt:
 
 st.divider()
 
-# --- 3. HISTÓRICO (SEM LINHAS VAZIAS) ---
+# --- 3. HISTÓRICO (TOTALMENTE COMPACTADO) ---
 st.subheader("📋 HISTORICO DE VELAS")
 if st.session_state.velas:
-    # Exibe apenas valores reais (ordem inversa)
-    df = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
+    # FILTRO RADICAL: Remove nulos e zeros na visualização
+    velas_exibir = [v for v in st.session_state.velas[::-1] if v > 0]
+    df = pd.DataFrame({"Vela": velas_exibir})
     st.dataframe(
         df.style.map(lambda x: 'color: #FF00FF; font-weight: bold' if x >= 8.0 else 'color: white').format("{:.2f}x"),
         use_container_width=True, height=400
@@ -107,10 +120,12 @@ if st.session_state.velas:
 
 st.divider()
 
-# --- 4. RODAPÉ: ÚLTIMAS 20 (COMPACTADO) ---
+# --- 4. RODAPÉ: ÚLTIMAS 20 (SEM VÍRGULAS VAZIAS) ---
 st.subheader("📉 ULTIMA 20 VELA ADICIONADA")
 if st.session_state.velas:
-    resumo = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in st.session_state.velas[-20:][::-1]]
+    # Só pega números reais para evitar as vírgulas sozinhas do seu print
+    ultimas_reais = [v for v in st.session_state.velas[-20:][::-1] if v > 0]
+    resumo = [f"<b style='color:{'#FF00FF' if v >= 8.0 else '#00FF00' if v >= 2.0 else '#FFFFFF'};'>{v:.2f}x</b>" for v in ultimas_reais]
     st.markdown(" , ".join(resumo), unsafe_allow_html=True)
 
 # RESET
