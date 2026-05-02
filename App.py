@@ -11,17 +11,17 @@ import numpy as np
 # =========================
 DB_FILE = "banco_velas_projeto.csv"
 MAX_VELAS = 10000
+MAX_POR_ENVIO = 500
 
 # =========================
-# BANCO DE DADOS (SEGURO)
+# BANCO
 # =========================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
             df = pd.read_csv(DB_FILE)
             st.session_state.velas = [
-                float(v) for v in df['velas'].dropna()
-                if float(v) > 0
+                float(v) for v in df['velas'].dropna() if float(v) > 0
             ]
         except:
             st.session_state.velas = []
@@ -29,8 +29,7 @@ if 'velas' not in st.session_state:
         st.session_state.velas = []
 
 def salvar():
-    df = pd.DataFrame({'velas': st.session_state.velas[-MAX_VELAS:]})
-    df.to_csv(DB_FILE, index=False)
+    pd.DataFrame({'velas': st.session_state.velas[-MAX_VELAS:]}).to_csv(DB_FILE, index=False)
 
 # =========================
 # OCR
@@ -44,28 +43,26 @@ reader = load_reader()
 def preprocessar(img):
     img = img.convert('L')
     img = np.array(img)
-    img = np.where(img > 150, 255, 0).astype(np.uint8)
+    img = np.where(img > 140, 255, 0).astype(np.uint8)
     return img
 
 # =========================
-# ORGANIZAÇÃO POR POSIÇÃO
+# ORGANIZAÇÃO POR LINHA (PRECISO)
 # =========================
 def organizar_por_posicao(res):
     linhas = []
 
     for (bbox, texto, conf) in res:
-        texto = texto.strip().lower()
-
-        if 'x' not in texto:
+        texto = texto.strip()
+        if 'x' not in texto.lower():
             continue
 
         x = bbox[0][0]
         y = bbox[0][1]
 
         colocado = False
-
         for linha in linhas:
-            if abs(linha['y'] - y) < 25:
+            if abs(linha['y'] - y) < 22:  # tolerância vertical ajustada
                 linha['itens'].append((x, texto))
                 colocado = True
                 break
@@ -73,38 +70,35 @@ def organizar_por_posicao(res):
         if not colocado:
             linhas.append({'y': y, 'itens': [(x, texto)]})
 
-    # 🔥 BAIXO → CIMA
+    # baixo → cima
     linhas.sort(key=lambda l: -l['y'])
 
     resultado = []
-
     for linha in linhas:
-        # 🔥 DIREITA → ESQUERDA
+        # direita → esquerda
         linha['itens'].sort(key=lambda i: -i[0])
-
         for _, texto in linha['itens']:
             resultado.append(texto)
 
     return resultado
 
 # =========================
-# EXTRAÇÃO INTELIGENTE
+# EXTRAÇÃO (SEM PERDER VALORES)
 # =========================
 def extrair_velas(lista_textos):
     velas = []
 
     for texto in lista_textos:
-        texto = texto.replace(',', '.').strip()
+        texto = texto.lower().replace(',', '.').strip()
 
-        match = re.search(r"\d+\.\d+x", texto)
+        # pega número mesmo com sujeira
+        match = re.search(r"\d+(?:\.\d+)?x", texto)
 
         if match:
             try:
                 val = float(match.group().replace('x', ''))
-
-                if 1.0 <= val <= 1000:
+                if val > 0:
                     velas.append(val)
-
             except:
                 continue
 
@@ -118,10 +112,10 @@ st.title("📊 ANALISADOR DE VELAS")
 aba1, aba2 = st.tabs(["📥 MANUAL", "📸 PRINT"])
 
 with aba1:
-    manual = st.text_area("Ex: 1.25x 4.10x")
+    manual = st.text_area("Cole até 500 velas: Ex: 1.25x 4.10x")
 
 with aba2:
-    arquivo = st.file_uploader("", type=['png','jpg','jpeg'])
+    arquivo = st.file_uploader("Envie o print", type=['png','jpg','jpeg'])
 
 # =========================
 # PROCESSAMENTO
@@ -141,18 +135,57 @@ if st.button("🚀 ADICIONAR", use_container_width=True):
     if textos:
         novas = extrair_velas(textos)
 
-        # adiciona sem lixo
+        # 🔥 LIMITE DE 500
+        if len(novas) > MAX_POR_ENVIO:
+            st.warning(f"{len(novas)} velas detectadas. Limitado a 500 por envio.")
+            novas = novas[:MAX_POR_ENVIO]
+
+        adicionadas = 0
+
         for v in novas:
             if isinstance(v, (int, float)) and v > 0:
                 st.session_state.velas.append(v)
+                adicionadas += 1
 
-        # limite de 10k
+        # limite histórico
         if len(st.session_state.velas) > MAX_VELAS:
             st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
 
         salvar()
-        st.success(f"{len(novas)} velas adicionadas!")
+        st.success(f"{adicionadas} velas adicionadas!")
         st.rerun()
+
+st.divider()
+
+# =========================
+# BUSCA
+# =========================
+st.subheader("🔍 BUSCA DE PADRÃO")
+
+seq = st.text_input("Ex: 1.25 2.00 3.50")
+
+if st.button("🔎 BUSCAR"):
+    if seq:
+        try:
+            padrao = [float(x.replace(',', '.')) for x in seq.split()]
+            hist = st.session_state.velas
+
+            achou = False
+
+            for i in range(len(hist) - len(padrao)):
+                if hist[i:i+len(padrao)] == padrao:
+                    achou = True
+                    st.success("Padrão encontrado!")
+
+                    futuro = hist[i+len(padrao):i+len(padrao)+10]
+                    if futuro:
+                        st.write([f"{v:.2f}x" for v in futuro])
+
+            if not achou:
+                st.error("Não encontrado")
+
+        except:
+            st.error("Erro no padrão")
 
 st.divider()
 
@@ -164,10 +197,10 @@ st.subheader("📋 HISTÓRICO")
 if st.session_state.velas:
     df = pd.DataFrame({"Vela": st.session_state.velas})
 
-    def cor(val):
-        if val >= 8:
+    def cor(v):
+        if v >= 8:
             return "color:#FF00FF; font-weight:bold"
-        elif val >= 2:
+        elif v >= 2:
             return "color:#00FF00"
         else:
             return "color:white"
@@ -181,12 +214,12 @@ if st.session_state.velas:
 st.divider()
 
 # =========================
-# ÚLTIMAS 20 (PERFEITO)
+# ÚLTIMAS 20
 # =========================
 st.subheader("📉 ÚLTIMAS 20")
 
 if st.session_state.velas:
-    ultimas = [v for v in st.session_state.velas[-20:] if v > 0]
+    ultimas = st.session_state.velas[-20:]
 
     texto = []
     for v in ultimas:
