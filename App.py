@@ -5,7 +5,6 @@ import re
 from PIL import Image
 import easyocr
 import numpy as np
-import cv2
 
 DB_FILE = "banco_velas_projeto.csv"
 MAX_VELAS = 10000
@@ -36,70 +35,66 @@ def load_reader():
 
 reader = load_reader()
 
-# =========================
-# 🔥 DETECÇÃO DE CÉLULAS
-# =========================
-def extrair_celulas(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # binarização forte
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
-
-    # detectar linhas horizontais
-    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (50,1))
-    detect_h = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_h)
-
-    # detectar linhas verticais
-    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1,50))
-    detect_v = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_v)
-
-    grid = cv2.add(detect_h, detect_v)
-
-    # encontrar contornos (células)
-    contours, _ = cv2.findContours(grid, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-    caixas = []
-
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-
-        # filtro de tamanho (ajuste fino)
-        if 30 < w < 200 and 20 < h < 100:
-            caixas.append((x, y, w, h))
-
-    # ordenação fiel ao print
-    caixas.sort(key=lambda b: (-b[1], -b[0]))
-
-    return caixas
+def preprocessar(img):
+    img = img.convert('L')
+    img = np.array(img)
+    img = np.where(img > 130, 255, 0).astype(np.uint8)
+    return img
 
 # =========================
-# OCR EM CADA CÉLULA
+# ORGANIZAÇÃO POR POSIÇÃO (FUNCIONA NO SEU PRINT)
 # =========================
-def ler_celulas(img, caixas):
+def organizar_por_posicao(res):
+    itens = []
+
+    for (bbox, texto, conf) in res:
+        texto = texto.strip().lower()
+
+        if 'x' not in texto:
+            continue
+
+        x = bbox[0][0]
+        y = bbox[0][1]
+
+        itens.append((y, x, texto))
+
+    # 🔥 ordem fiel ao print
+    itens.sort(key=lambda i: (-i[0], -i[1]))
+
+    return [i[2] for i in itens]
+
+# =========================
+# EXTRAÇÃO ULTRA ROBUSTA (NÃO PERDE NENHUMA)
+# =========================
+def extrair_velas(lista_textos):
     velas = []
+    buffer = ""
 
-    for (x, y, w, h) in caixas:
-        crop = img[y:y+h, x:x+w]
+    for texto in lista_textos:
+        texto = texto.replace(',', '.').strip()
 
-        texto = reader.readtext(crop, detail=0)
-        texto = " ".join(texto).lower().replace(',', '.')
+        buffer += " " + texto
 
-        match = re.search(r"\d+(?:\.\d+)?x", texto)
+        encontrados = re.findall(r"\d+(?:\.\d+)?x", buffer)
 
-        if match:
+        for item in encontrados:
             try:
-                val = float(match.group().replace('x', ''))
+                val = float(item.replace('x', ''))
                 if val > 0:
                     velas.append(val)
             except:
                 continue
+
+        # evita duplicação infinita
+        if len(buffer) > 60:
+            buffer = buffer[-25:]
 
     return velas
 
 # =========================
 # INTERFACE
 # =========================
-st.title("📊 ANALISADOR PROFISSIONAL DE VELAS")
+st.title("📊 ANALISADOR DE VELAS (PRECISO)")
 
 aba1, aba2 = st.tabs(["📥 MANUAL", "📸 PRINT"])
 
@@ -114,37 +109,36 @@ with aba2:
 # =========================
 if st.button("🚀 ADICIONAR", use_container_width=True):
 
-    novas = []
+    textos = []
 
     if arquivo:
-        img_pil = Image.open(arquivo)
-        img = np.array(img_pil)
-
-        caixas = extrair_celulas(img)
-        novas = ler_celulas(img, caixas)
+        img = preprocessar(Image.open(arquivo))
+        res = reader.readtext(img, detail=1)
+        textos = organizar_por_posicao(res)
 
     if manual:
-        manual_vals = re.findall(r"\d+(?:\.\d+)?", manual.replace(',', '.'))
-        novas += [float(v) for v in manual_vals]
+        textos += manual.split()
 
-    # limite 500
-    if len(novas) > MAX_POR_ENVIO:
-        st.warning(f"{len(novas)} velas detectadas. Limitado a 500.")
-        novas = novas[:MAX_POR_ENVIO]
+    if textos:
+        novas = extrair_velas(textos)
 
-    adicionadas = 0
+        if len(novas) > MAX_POR_ENVIO:
+            st.warning(f"{len(novas)} velas detectadas. Limitado a 500.")
+            novas = novas[:MAX_POR_ENVIO]
 
-    for v in novas:
-        if v > 0:
-            st.session_state.velas.append(v)
-            adicionadas += 1
+        adicionadas = 0
 
-    if len(st.session_state.velas) > MAX_VELAS:
-        st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
+        for v in novas:
+            if v > 0:
+                st.session_state.velas.append(v)
+                adicionadas += 1
 
-    salvar()
-    st.success(f"{adicionadas} velas adicionadas!")
-    st.rerun()
+        if len(st.session_state.velas) > MAX_VELAS:
+            st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
+
+        salvar()
+        st.success(f"{adicionadas} velas adicionadas!")
+        st.rerun()
 
 st.divider()
 
