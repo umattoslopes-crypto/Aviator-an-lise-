@@ -6,11 +6,14 @@ from PIL import Image
 import easyocr
 import numpy as np
 
+# ================================
+# CONFIG
+# ================================
 DB_FILE = "banco_velas_projeto.csv"
 MAX_VELAS = 10000
 
 # ================================
-# CARREGAMENTO SEGURO (NÃO APAGA)
+# BANCO (NÃO APAGA)
 # ================================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
@@ -46,37 +49,56 @@ def preprocessar(img):
     return img
 
 # ================================
-# 🔥 ORDEM CORRETA (CHAVE DO PROBLEMA)
+# 🔥 ORGANIZAÇÃO FIEL AO PRINT
 # ================================
 def organizar_por_posicao(res):
-    itens = []
+    linhas = []
 
     for (bbox, texto, conf) in res:
         if 'x' in texto.lower():
             x = bbox[0][0]
             y = bbox[0][1]
-            itens.append((y, x, texto))
 
-    # 🔥 ordena de BAIXO → CIMA e DIREITA → ESQUERDA
-    itens.sort(key=lambda i: (-i[0], -i[1]))
+            encontrou = False
+            for linha in linhas:
+                if abs(linha['y'] - y) < 25:
+                    linha['itens'].append((x, texto))
+                    encontrou = True
+                    break
 
-    return " ".join([i[2] for i in itens])
+            if not encontrou:
+                linhas.append({'y': y, 'itens': [(x, texto)]})
 
-def extrair_velas(texto):
-    texto = texto.lower()
-    texto = texto.replace(',', '.')
-    texto = texto.replace(' ', '')
+    # 🔥 baixo → cima
+    linhas.sort(key=lambda l: -l['y'])
 
-    encontrados = re.findall(r"\d+\.\d+x", texto)
+    resultado = []
 
+    for linha in linhas:
+        # 🔥 direita → esquerda
+        linha['itens'].sort(key=lambda i: -i[0])
+
+        for item in linha['itens']:
+            resultado.append(item[1])
+
+    return resultado
+
+def extrair_velas(lista_textos):
     velas = []
-    for v in encontrados:
-        try:
-            val = float(v.replace('x', ''))
-            if 1.0 <= val <= 1000:
-                velas.append(val)
-        except:
-            continue
+
+    for texto in lista_textos:
+        texto = texto.lower().replace(',', '.')
+
+        match = re.search(r"\d+\.\d+x", texto)
+        if match:
+            try:
+                val = float(match.group().replace('x', ''))
+
+                if 1.0 <= val <= 1000:
+                    velas.append(val)
+
+            except:
+                continue
 
     return velas
 
@@ -98,52 +120,52 @@ with aba2:
 # ================================
 if st.button("🚀 ADICIONAR", use_container_width=True):
 
-    texto = ""
+    texto_lista = []
 
     if arquivo:
         img = preprocessar(Image.open(arquivo))
         res = reader.readtext(img, detail=1)
-        texto += organizar_por_posicao(res)
+        texto_lista = organizar_por_posicao(res)
 
     if manual:
-        texto += " " + manual
+        texto_lista += manual.split()
 
-    if texto:
-        novas = extrair_velas(texto)
+    if texto_lista:
+        novas = extrair_velas(texto_lista)
 
-        # 🔥 ANTI DUPLICAÇÃO FORTE
-        ultimas = st.session_state.velas[-50:]
-        final = []
-
+        # anti lixo
         for v in novas:
-            if v not in ultimas:
-                final.append(v)
+            if isinstance(v, (int, float)) and v > 0:
+                st.session_state.velas.append(v)
 
-        if final:
-            st.session_state.velas.extend(final)
+        # limite 10k
+        if len(st.session_state.velas) > MAX_VELAS:
+            st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
 
-            # 🔥 LIMITADOR SEM PERDER DADOS ANTIGOS IMEDIATAMENTE
-            if len(st.session_state.velas) > MAX_VELAS:
-                st.session_state.velas = st.session_state.velas[-MAX_VELAS:]
-
-            salvar()
-            st.success(f"{len(final)} velas adicionadas!")
-            st.rerun()
-        else:
-            st.warning("Nada novo detectado")
+        salvar()
+        st.success(f"{len(novas)} velas adicionadas!")
+        st.rerun()
 
 st.divider()
 
 # ================================
-# HISTÓRICO (COMPLETO)
+# HISTÓRICO COLORIDO
 # ================================
 st.subheader("📋 HISTÓRICO")
 
 if st.session_state.velas:
-    df = pd.DataFrame({"Vela": st.session_state.velas[::-1]})
+    df = pd.DataFrame({"Vela": st.session_state.velas})
+
+    def colorir(val):
+        if val >= 8:
+            return "color: #FF00FF; font-weight: bold"
+        elif val >= 2:
+            return "color: #00FF00"
+        else:
+            return "color: white"
 
     st.dataframe(
-        df.style.format("{:.2f}x"),
+        df.style.map(colorir).format("{:.2f}x"),
         use_container_width=True,
         height=400
     )
@@ -151,24 +173,28 @@ if st.session_state.velas:
 st.divider()
 
 # ================================
-# 🔥 ÚLTIMAS 20 CORRIGIDO
+# ÚLTIMAS 20 (SEM ERRO)
 # ================================
 st.subheader("📉 ÚLTIMAS 20")
 
 if st.session_state.velas:
-    ultimas = st.session_state.velas[-20:][::-1]
-
-    texto = [
-        f"<b style='color:{'#FF00FF' if v >= 8 else '#00FF00' if v >= 2 else '#FFFFFF'}'>{v:.2f}x</b>"
-        for v in ultimas if v > 0
+    ultimas = [
+        v for v in st.session_state.velas[-20:]
+        if isinstance(v, (int, float)) and v > 0
     ]
 
-    st.markdown(" , ".join(texto), unsafe_allow_html=True)
+    if ultimas:
+        texto = []
+        for v in ultimas:
+            cor = "#FF00FF" if v >= 8 else "#00FF00" if v >= 2 else "#FFFFFF"
+            texto.append(f"<b style='color:{cor}'>{v:.2f}x</b>")
+
+        st.markdown(" , ".join(texto), unsafe_allow_html=True)
 
 st.divider()
 
 # ================================
-# RESET (OPCIONAL)
+# RESET
 # ================================
 if st.checkbox("Reset"):
 
