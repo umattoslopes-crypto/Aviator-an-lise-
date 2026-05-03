@@ -1,90 +1,65 @@
-import streamlit as st
-import pandas as pd
-import os
-import re
-from PIL import Image
-import easyocr
-import numpy as np
-import cv2
-
-DB_FILE = "banco_velas_projeto.csv"
-LIMITE = 10000
-
-# =========================
-# BANCO DE DADOS
-# =========================
-if 'velas' not in st.session_state:
-    if os.path.exists(DB_FILE):
-        try:
-            df = pd.read_csv(DB_FILE)
-            st.session_state.velas = [float(v) for v in df['vela'].dropna() if float(v) > 0]
-        except:
-            st.session_state.velas = []
-    else:
-        st.session_state.velas = []
-
-def salvar():
-    pd.DataFrame({'vela': st.session_state.velas[-LIMITE:]}).to_csv(DB_FILE, index=False)
-
-# =========================
-# OCR
-# =========================
-@st.cache_resource
-def load_reader():
-    return easyocr.Reader(['en'], gpu=False)
-
-reader = load_reader()
-
 def extrair_velas_print(img):
     img_np = np.array(img.convert('RGB'))
     h, w = img_np.shape[:2]
 
-    # 🔥 corta área dos resultados (ajustado pro seu print)
-    img_np = img_np[int(h*0.45):int(h*0.95), int(w*0.05):int(w*0.95)]
+    # 🔥 corte da área da grade (ajustado pro seu print)
+    img_np = img_np[int(h*0.50):int(h*0.88), int(w*0.08):int(w*0.78)]
 
-    # pré-processamento forte
-    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    gray = cv2.equalizeHist(gray)
+    hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
 
-    _, bin_img = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    # 🎯 máscaras de cor (verde e vermelho)
+    mask_verde = cv2.inRange(hsv, (40, 50, 50), (90, 255, 255))
+    mask_vermelho1 = cv2.inRange(hsv, (0, 50, 50), (10, 255, 255))
+    mask_vermelho2 = cv2.inRange(hsv, (170, 50, 50), (180, 255, 255))
 
-    resultados = reader.readtext(
-        bin_img,
-        detail=1,
-        paragraph=False,
-        allowlist='0123456789.x'
-    )
+    mask = mask_verde | mask_vermelho1 | mask_vermelho2
+
+    # limpa ruído
+    kernel = np.ones((3,3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    contornos, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     itens = []
 
-    for (bbox, texto, conf) in resultados:
-        t = texto.lower().replace(',', '.').strip()
+    for cnt in contornos:
+        x, y, w_box, h_box = cv2.boundingRect(cnt)
 
-        # DEBUG (ver o que OCR está lendo)
-        st.write("Detectado:", t)
-
-        if not re.search(r'\d', t):
+        if w_box < 40 or h_box < 20:
             continue
 
-        nums = re.findall(r"\d+(?:\.\d+)?", t)
+        recorte = img_np[y:y+h_box, x:x+w_box]
 
-        if nums:
-            y = np.mean([p[1] for p in bbox])
-            x = np.mean([p[0] for p in bbox])
+        gray = cv2.cvtColor(recorte, cv2.COLOR_RGB2GRAY)
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
-            for n in nums:
+        textos = reader.readtext(thresh, detail=0, allowlist='0123456789.x')
+
+        for t in textos:
+            t = t.lower().replace(',', '.').strip()
+
+            if 'x' not in t:
+                continue
+
+            match = re.findall(r"\d+\.\d+x", t)
+
+            if match:
                 try:
-                    v = float(n)
-                    if 1.0 <= v < 1000:
-                        itens.append({'y': y, 'x': x, 'v': v})
+                    valor = float(match[0].replace('x',''))
+
+                    # evita lixo (tipo 500)
+                    if 1.0 <= valor <= 200:
+                        itens.append({
+                            'x': x,
+                            'y': y,
+                            'v': valor
+                        })
                 except:
                     pass
 
-    # =========================
-    # AGRUPAR POR LINHAS
-    # =========================
+    # 🔥 organizar por linhas
     linhas = []
-    tol = 25
+    tol = 20
 
     for item in sorted(itens, key=lambda i: i['y']):
         colocado = False
@@ -96,129 +71,14 @@ def extrair_velas_print(img):
         if not colocado:
             linhas.append([item])
 
-    # =========================
-    # ORDEM CORRETA
-    # topo → baixo | direita → esquerda
-    # =========================
+    # 🔥 ordem: topo → baixo, direita → esquerda
     linhas.sort(key=lambda l: l[0]['y'])
 
     velas = []
+
     for linha in linhas:
         linha.sort(key=lambda i: -i['x'])
         for item in linha:
-            velas.append(item['v'])
+            velas.append(f"{item['v']:.2f}x")  # 👈 já retorna com "x"
 
     return velas
-
-# =========================
-# INTERFACE
-# =========================
-st.title("ATE 10.000 VELAS")
-
-aba1, aba2 = st.tabs(["INSERIR MANUAL", "INSERIR POR PRINT"])
-
-with aba1:
-    manual = st.text_area("Exemplo: 1.16x 10.71x", height=100)
-
-with aba2:
-    arquivo = st.file_uploader("Envie o print dos resultados", type=['png','jpg','jpeg'])
-
-if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
-    novas = []
-
-    if arquivo:
-        with st.spinner("Lendo print..."):
-            novas = extrair_velas_print(Image.open(arquivo))
-            if not novas:
-                st.error("Nenhuma vela detectada no print")
-
-    if manual:
-        nums = re.findall(r"(\d+(?:\.\d+)?)", manual.replace(',', '.'))
-        novas += [float(n) for n in nums]
-
-    if novas:
-        st.session_state.velas += novas
-        if len(st.session_state.velas) > LIMITE:
-            st.session_state.velas = st.session_state.velas[-LIMITE:]
-        salvar()
-        st.success(f"{len(novas)} velas adicionadas!")
-        st.rerun()
-
-st.divider()
-
-# =========================
-# BUSCA DE PADRÃO
-# =========================
-st.write("**BUSCA DE PADRÃO**")
-
-col_b1, col_b2 = st.columns([0.8, 0.2])
-
-with col_b1:
-    seq = st.text_input("Sequência...", label_visibility="collapsed")
-
-with col_b2:
-    if st.button("🔎"):
-        if seq:
-            padrao = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", seq.replace(',', '.'))]
-            h = st.session_state.velas
-
-            def comparar(a, b, tol=0.01):
-                return all(abs(x - y) <= tol for x, y in zip(a, b))
-
-            achou = False
-
-            for i in range(len(h) - len(padrao) + 1):
-                if comparar(h[i:i+len(padrao)], padrao):
-                    st.success(f"Achado! Próximas: {h[i+len(padrao):i+len(padrao)+5]}")
-                    achou = True
-
-            if not achou:
-                st.warning("Nenhum padrão encontrado")
-
-st.divider()
-
-# =========================
-# HISTÓRICO
-# =========================
-st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
-
-if st.session_state.velas:
-    df_hist = pd.DataFrame({"vela": st.session_state.velas[::-1]})
-
-    st.dataframe(
-        df_hist.style.map(
-            lambda v: "color:#FF00FF; font-weight:bold" if v >= 8 else
-                      "color:#00FF00" if v >= 2 else
-                      "color:white"
-        ).format("{:.2f}x"),
-        use_container_width=True,
-        height=350
-    )
-
-st.divider()
-
-# =========================
-# ÚLTIMAS 20
-# =========================
-col_f1, col_f2 = st.columns([0.6, 0.4])
-
-with col_f1:
-    st.write("**ÚLTIMAS 20 ADICIONADAS**")
-    if st.session_state.velas:
-        ultimas = st.session_state.velas[-20:]
-        fmt = [f"<b style='color:{('#FF00FF' if v>=8 else '#00FF00' if v>=2 else '#FFF')}'>{v:.2f}x</b>" for v in ultimas]
-        st.markdown(" , ".join(fmt), unsafe_allow_html=True)
-
-with col_f2:
-    st.write("**REDEFINIR**")
-
-    if st.button("APAGAR ÚLTIMAS 20", use_container_width=True):
-        st.session_state.velas = st.session_state.velas[:-20]
-        salvar()
-        st.rerun()
-
-    if st.button("ZERAR TUDO", use_container_width=True):
-        if os.path.exists(DB_FILE):
-            os.remove(DB_FILE)
-        st.session_state.velas = []
-        st.rerun()
