@@ -37,42 +37,46 @@ reader = load_reader()
 
 def extrair_velas_print(img):
     img_np = np.array(img.convert('RGB'))
+    h, w = img_np.shape[:2]
 
-    # =========================
-    # PRÉ-PROCESSAMENTO (mantido)
-    # =========================
+    # 🔥 corta área dos resultados (ajustado pro seu print)
+    img_np = img_np[int(h*0.45):int(h*0.95), int(w*0.05):int(w*0.95)]
+
+    # pré-processamento forte
     gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-    gray = cv2.convertScaleAbs(gray, alpha=1.8, beta=20)
-    gray = cv2.GaussianBlur(gray, (3,3), 0)
+    gray = cv2.equalizeHist(gray)
 
-    bin_img = cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY_INV,
-        15, 3
+    _, bin_img = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+
+    resultados = reader.readtext(
+        bin_img,
+        detail=1,
+        paragraph=False,
+        allowlist='0123456789.x'
     )
-
-    resultados = reader.readtext(bin_img, detail=1)
 
     itens = []
 
     for (bbox, texto, conf) in resultados:
-        t = texto.lower().replace(',', '.').replace(' ', '').strip()
+        t = texto.lower().replace(',', '.').strip()
 
-        if 'x' not in t:
+        # DEBUG (ver o que OCR está lendo)
+        st.write("Detectado:", t)
+
+        if not re.search(r'\d', t):
             continue
 
-        match = re.findall(r"\d+\.\d+x", t)
+        nums = re.findall(r"\d+(?:\.\d+)?", t)
 
-        if match:
+        if nums:
             y = np.mean([p[1] for p in bbox])
             x = np.mean([p[0] for p in bbox])
 
-            for m in match:
+            for n in nums:
                 try:
-                    valor = float(m.replace('x',''))
-                    if 1.0 <= valor < 10000:
-                        itens.append({'y': y, 'x': x, 'v': valor})
+                    v = float(n)
+                    if 1.0 <= v < 1000:
+                        itens.append({'y': y, 'x': x, 'v': v})
                 except:
                     pass
 
@@ -80,12 +84,12 @@ def extrair_velas_print(img):
     # AGRUPAR POR LINHAS
     # =========================
     linhas = []
-    tolerancia_y = 25
+    tol = 25
 
     for item in sorted(itens, key=lambda i: i['y']):
         colocado = False
         for linha in linhas:
-            if abs(linha[0]['y'] - item['y']) < tolerancia_y:
+            if abs(linha[0]['y'] - item['y']) < tol:
                 linha.append(item)
                 colocado = True
                 break
@@ -93,30 +97,18 @@ def extrair_velas_print(img):
             linhas.append([item])
 
     # =========================
-    # 🔥 ORDEM CORRETA (AJUSTE FINAL)
+    # ORDEM CORRETA
+    # topo → baixo | direita → esquerda
     # =========================
-
-    # Linhas: CIMA → BAIXO
-    linhas.sort(key=lambda linha: linha[0]['y'])
+    linhas.sort(key=lambda l: l[0]['y'])
 
     velas = []
-
     for linha in linhas:
-        # Dentro da linha: DIREITA → ESQUERDA
         linha.sort(key=lambda i: -i['x'])
-
         for item in linha:
             velas.append(item['v'])
 
-    # =========================
-    # REMOVER DUPLICADOS OCR
-    # =========================
-    velas_filtradas = []
-    for v in velas:
-        if not velas_filtradas or abs(v - velas_filtradas[-1]) > 0.01:
-            velas_filtradas.append(v)
-
-    return velas_filtradas
+    return velas
 
 # =========================
 # INTERFACE
@@ -154,8 +146,11 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
 
 st.divider()
 
+# =========================
 # BUSCA DE PADRÃO
+# =========================
 st.write("**BUSCA DE PADRÃO**")
+
 col_b1, col_b2 = st.columns([0.8, 0.2])
 
 with col_b1:
@@ -182,7 +177,9 @@ with col_b2:
 
 st.divider()
 
+# =========================
 # HISTÓRICO
+# =========================
 st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
 
 if st.session_state.velas:
@@ -200,7 +197,9 @@ if st.session_state.velas:
 
 st.divider()
 
-# ÚLTIMAS 20 E REDEFINIR
+# =========================
+# ÚLTIMAS 20
+# =========================
 col_f1, col_f2 = st.columns([0.6, 0.4])
 
 with col_f1:
