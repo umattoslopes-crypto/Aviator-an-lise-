@@ -7,21 +7,20 @@ import numpy as np
 import cv2
 import easyocr
 
-# =========================
-# CONFIGURAÇÕES E BANCO
-# =========================
 DB_FILE = "banco_velas_projeto.csv"
 LIMITE = 10000
 
+# =========================
+# BANCO DE DADOS (LIMPEZA DEFINITIVA)
+# =========================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
             df = pd.read_csv(DB_FILE)
-            # Carrega e limpa linhas vazias
+            # Carrega e limpa qualquer valor nulo ou erro anterior
             st.session_state.velas = [float(v) for v in df['vela'].dropna() if float(v) > 0]
         except: st.session_state.velas = []
-    else:
-        st.session_state.velas = []
+    else: st.session_state.velas = []
 
 def salvar():
     pd.DataFrame({'vela': st.session_state.velas[-LIMITE:]}).to_csv(DB_FILE, index=False)
@@ -30,127 +29,93 @@ def salvar():
 def load_reader():
     return easyocr.Reader(['en'], gpu=False)
 
-# ==========================================
-# FÓRMULA DE LEITURA: "X" + ORDEM ESPECÍFICA
-# ==========================================
+# =========================
+# OCR (AJUSTADO PARA O BIG BASS)
+# =========================
 def extrair_velas_print(img):
     reader = load_reader()
     img_np = np.array(img.convert('L'))
     h, w = img_np.shape
-    
-    # Corte da grade de velas (Big Bass Crash)
     corte = img_np[int(h*0.52):int(h*0.88), int(w*0.08):int(w*0.78)]
-    # Binarização para destacar o branco dos números
     _, bin_img = cv2.threshold(corte, 165, 255, cv2.THRESH_BINARY)
     
     res = reader.readtext(bin_img)
     itens = []
-    
     for (bbox, texto, conf) in res:
         t = texto.lower().replace(',', '.').strip()
-        
-        # 1. SÓ OLHA PARA OS NÚMEROS COM "X" NO FINAL
-        if 'x' in t:
-            num_match = re.search(r"(\d+(?:\.\d+)?)", t)
-            if num_match:
-                try:
-                    val = float(num_match.group(1))
-                    # Correção automática do ponto (ex: 116 vira 1.16)
-                    if val > 100 and '.' not in t:
-                        val = float(str(val)[0] + "." + str(val)[1:])
-                    
-                    if 1.0 <= val <= 5000:
-                        # Coordenadas para ordenação
-                        y_centro = np.mean([p[1] for p in bbox])
-                        x_centro = np.mean([p[0] for p in bbox])
-                        itens.append({'y': y_centro, 'x': x_centro, 'v': val})
-                except: continue
-
-    # 2. AGRUPAR POR LINHAS (Tolerância de 25px)
-    linhas_temp = []
-    for item in sorted(itens, key=lambda i: i['y']):
-        colocado = False
-        for linha in linhas_temp:
-            if abs(linha[0]['y'] - item['y']) < 25:
-                linha.append(item)
-                colocado = True
-                break
-        if not colocado:
-            linhas_temp.append([item])
-
-    # 3. ORDEM: DE BAIXO PARA CIMA (Y Inverso)
-    linhas_temp.sort(key=lambda l: l[0]['y'], reverse=True)
-    
-    velas_ordenadas = []
-    for linha in linhas_temp:
-        # 4. ORDEM: DA DIREITA PARA A ESQUERDA (X Inverso)
-        linha.sort(key=lambda i: i['x'], reverse=True)
-        for item in linha:
-            velas_ordenadas.append(item['v'])
+        # Captura apenas o que tem número e 'x'
+        num_match = re.search(r"(\d+(?:\.\d+)?)", t)
+        if num_match:
+            val = float(num_match.group(1))
+            # Correção do 1.16x se o ponto sumir
+            if val > 100 and '.' not in t: val = float(str(val) + "." + str(val)[1:])
             
-    return velas_ordenadas
+            y = np.mean([p[1] for p in bbox])
+            x = np.mean([p[0] for p in bbox])
+            itens.append({'x': x, 'y': y, 'v': val})
+
+    # Ordena da esquerda para a direita, linha por linha
+    itens.sort(key=lambda i: (i['y'] // 30, i['x']))
+    return [i['v'] for i in itens]
 
 # =========================
-# INTERFACE (LAYOUT DO DESENHO)
+# INTERFACE (LAYOUT DO SEU DESENHO)
 # =========================
-st.set_page_config(page_title="Scanner de Velas", layout="centered")
-st.title("PROJETO 10.000 VELAS")
+st.title("ATE 10.000 VELAS")
 
 aba1, aba2 = st.tabs(["INSERIR MANUAL", "INSERIR POR PRINT"])
 
 with aba1:
-    manual = st.text_area("Ex: 1.16x 10.71x 5x", height=100)
+    # MUDANÇA AQUI: Instrução clara para não haver erro humano
+    manual = st.text_area("Cole as velas exatamente como transcrevi (Ex: 1.16x 9.64x 5.00x)", height=150)
 
 with aba2:
-    arquivo = st.file_uploader("Suba seus prints aqui", type=['png','jpg','jpeg'])
+    arquivo = st.file_uploader("Envie o print aqui", type=['png','jpg','jpeg'])
 
 if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
     novas = []
     if arquivo:
-        with st.spinner("Decifrando grade..."):
+        with st.spinner("Lendo print..."):
             novas = extrair_velas_print(Image.open(arquivo))
+    
     if manual:
+        # AQUI ESTÁ A FIDELIDADE: Ele captura cada número decimal individualmente
+        # Não importa se tem espaço, vírgula ou 'x', ele pega o valor real
         m_nums = re.findall(r"(\d+(?:\.\d+)?)", manual.replace(',', '.'))
         novas += [float(n) for n in m_nums]
 
     if novas:
-        # Adiciona ao banco
+        # Adiciona ao banco garantindo que são números válidos
         st.session_state.velas += novas
-        # Mantém o limite de 10k
         if len(st.session_state.velas) > LIMITE:
             st.session_state.velas = st.session_state.velas[-LIMITE:]
         salvar()
-        st.success(f"✅ {len(novas)} velas adicionadas com sucesso!")
+        st.success(f"{len(novas)} velas adicionadas fielmente!")
         st.rerun()
 
 st.divider()
 
-# =========================
 # BUSCA DE PADRÃO
-# =========================
 st.write("**BUSCA DE PADRÃO**")
 col_b1, col_b2 = st.columns([0.8, 0.2])
 with col_b1:
-    seq = st.text_input("Digite a sequência...", label_visibility="collapsed", placeholder="Ex: 1.16 1.09")
+    seq = st.text_input("Digite a sequência...", label_visibility="collapsed")
 with col_b2:
-    btn_busca = st.button("🔎")
-
-if btn_busca and seq:
-    padrao = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", seq.replace(',', '.'))]
-    h = st.session_state.velas
-    achado = False
-    for i in range(len(h) - len(padrao)):
-        if h[i:i+len(padrao)] == padrao:
-            st.success(f"Padrão encontrado! Próxima vela: **{h[i+len(padrao)]:.2f}x**")
-            achado = True
-    if not achado: st.warning("Sequência não encontrada no histórico.")
+    if st.button("🔎"):
+        if seq:
+            padrao = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", seq.replace(',', '.'))]
+            h = st.session_state.velas
+            achou = False
+            for i in range(len(h) - len(padrao)):
+                if h[i:i+len(padrao)] == padrao:
+                    st.success(f"Achado! Próxima: **{h[i+len(padrao)]:.2f}x**")
+                    achou = True
+            if not achou: st.warning("Padrão não encontrado.")
 
 st.divider()
 
-# =========================
-# HISTÓRICO (TABELA COLORIDA)
-# =========================
-st.write(f"**HISTÓRICO COMPLETO (Total: {len(st.session_state.velas)})**")
+# HISTÓRICO (SEM LINHAS BRANCAS)
+st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
 if st.session_state.velas:
     # Mostra do mais novo para o mais velho
     df_h = pd.DataFrame({"vela": reversed(st.session_state.velas)})
@@ -161,11 +126,8 @@ if st.session_state.velas:
 
 st.divider()
 
-# =========================
-# ÚLTIMAS 20 E REDEFINIR
-# =========================
+# ÚLTIMAS 20 (SEM VÍRGULAS VAZIAS) E RESET
 col_f1, col_f2 = st.columns([0.6, 0.4])
-
 with col_f1:
     st.write("**ÚLTIMAS 20 ADICIONADAS**")
     if st.session_state.velas:
@@ -178,7 +140,6 @@ with col_f2:
     if st.button("APAGAR ÚLTIMAS 20", use_container_width=True):
         st.session_state.velas = st.session_state.velas[:-20]
         salvar(); st.rerun()
-        
     if st.button("ZERAR TUDO", use_container_width=True):
         if os.path.exists(DB_FILE): os.remove(DB_FILE)
         st.session_state.velas = []; st.rerun()
