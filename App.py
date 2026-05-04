@@ -3,13 +3,13 @@ import pandas as pd
 import os
 import re
 
-DB_FILE = "banco_velas_projeto.csv"
+DB_FILE = "velas_salvas.csv"
 MAX_VELAS = 500
 
 # =========================
-# CARREGAR BANCO
+# FUNÇÕES DE ARQUIVO
 # =========================
-def carregar_dados():
+def carregar():
     if os.path.exists(DB_FILE):
         try:
             df = pd.read_csv(DB_FILE)
@@ -18,32 +18,30 @@ def carregar_dados():
             return []
     return []
 
-def salvar_dados(lista):
+def salvar(lista):
     pd.DataFrame({"vela": lista}).to_csv(DB_FILE, index=False)
 
 # =========================
 # INICIALIZAÇÃO
 # =========================
 if "velas" not in st.session_state:
-    st.session_state.velas = carregar_dados()
+    st.session_state.velas = carregar()
 
 # =========================
-# FUNÇÃO DE EXTRAÇÃO (ROBUSTA)
+# EXTRAÇÃO
 # =========================
 def extrair_velas(texto):
     if not texto:
         return []
 
     texto = texto.lower().replace(",", ".")
-    
-    # pega qualquer número decimal
     encontrados = re.findall(r"\d+\.?\d*", texto)
 
     velas = []
     for n in encontrados:
         try:
             v = float(n)
-            if v >= 1.0 and v < 10000:
+            if v >= 1.0:
                 velas.append(v)
         except:
             continue
@@ -55,90 +53,111 @@ def extrair_velas(texto):
 # =========================
 st.title("📊 HISTÓRICO DE VELAS")
 
-entrada = st.text_area(
-    "Cole as velas:",
-    placeholder="Ex: 1.16x 9.64x 5,00x\n1.05x 1.99x 20x",
-    height=150
-)
+entrada = st.text_area("Cole as velas:", height=150)
 
 # =========================
-# BOTÃO ADICIONAR
+# BOTÕES PRINCIPAIS
 # =========================
-if st.button("🚀 ADICIONAR"):
-    novas = extrair_velas(entrada)
+colA, colB, colC = st.columns(3)
 
-    if novas:
-        if len(novas) > MAX_VELAS:
-            novas = novas[:MAX_VELAS]
-            st.warning(f"Limitado a {MAX_VELAS} velas por vez")
+with colA:
+    if st.button("🚀 ADICIONAR"):
+        novas = extrair_velas(entrada)
 
-        st.session_state.velas.extend(novas)
-        salvar_dados(st.session_state.velas)
+        if novas:
+            if len(novas) > MAX_VELAS:
+                novas = novas[:MAX_VELAS]
 
-        st.success(f"{len(novas)} velas adicionadas!")
+            st.session_state.velas.extend(novas)
+            salvar(st.session_state.velas)
+
+            st.success(f"{len(novas)} velas adicionadas!")
+            st.rerun()
+        else:
+            st.error("Nenhuma vela válida encontrada!")
+
+with colB:
+    if st.button("💾 SALVAR"):
+        salvar(st.session_state.velas)
+        st.success("Dados salvos!")
+
+with colC:
+    if st.button("🔄 RELOAD"):
+        st.session_state.velas = carregar()
+        st.success("Dados recarregados do arquivo!")
         st.rerun()
-    else:
-        st.error("Nenhuma vela válida encontrada!")
 
+# =========================
+# BACKUP / RESTAURAÇÃO
+# =========================
 st.divider()
+st.subheader("💾 Backup")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "rb") as file:
+            st.download_button(
+                "📥 Baixar Backup",
+                file,
+                file_name="backup_velas.csv"
+            )
+
+with col2:
+    arquivo = st.file_uploader("📤 Restaurar Backup", type=["csv"])
+
+    if arquivo:
+        df = pd.read_csv(arquivo)
+        st.session_state.velas = pd.to_numeric(df["vela"], errors="coerce").dropna().tolist()
+        salvar(st.session_state.velas)
+        st.success("Backup restaurado!")
+        st.rerun()
 
 # =========================
 # EXIBIÇÃO
 # =========================
 if st.session_state.velas:
 
-    total = len(st.session_state.velas)
-    st.subheader(f"Total no Histórico: {total}")
-
     dados = list(reversed(st.session_state.velas))
     df = pd.DataFrame({"VELAS": dados})
 
-    # 🔥 CORRIGIDO: NUNCA MAIS FICA INVISÍVEL
     def colorir(val):
         try:
-            val = float(val)
             if val >= 8:
                 return "color: #FF00FF; font-weight: bold"
             elif val >= 2:
                 return "color: #008000; font-weight: bold"
             else:
-                return "color: #000000"  # preto
+                return "color: #000000"
         except:
             return ""
 
     st.dataframe(
         df.style.map(colorir).format("{:.2f}x"),
         use_container_width=True,
-        height=500
+        height=400
     )
 
     st.divider()
 
-    # =========================
-    # BOTÕES
-    # =========================
     col1, col2 = st.columns(2)
 
     with col1:
         if st.button("🗑️ APAGAR ÚLTIMAS 20"):
-            if len(st.session_state.velas) >= 20:
-                st.session_state.velas = st.session_state.velas[:-20]
-            else:
-                st.session_state.velas = []
-
-            salvar_dados(st.session_state.velas)
+            st.session_state.velas = st.session_state.velas[:-20]
+            salvar(st.session_state.velas)
             st.rerun()
 
     with col2:
         if st.button("🚨 ZERAR TUDO"):
             if os.path.exists(DB_FILE):
                 os.remove(DB_FILE)
-
             st.session_state.velas = []
             st.rerun()
 
 # =========================
-# ANÁLISE REAL
+# ANÁLISE
 # =========================
 if st.session_state.velas:
     st.divider()
@@ -150,10 +169,5 @@ if st.session_state.velas:
         acima_2 = sum(1 for v in ultimas if v >= 2)
         acima_6 = sum(1 for v in ultimas if v >= 6)
 
-        st.write(f"Últimas 20 velas analisadas:")
         st.write(f"✔ >=2x: {acima_2}")
         st.write(f"🔥 >=6x: {acima_6}")
-
-        # 🔥 DEBUG (se algo der errado você vê aqui)
-        with st.expander("🔍 Ver últimas velas (debug)"):
-            st.write(ultimas)
