@@ -7,7 +7,7 @@ DB_FILE = "velas_salvas.csv"
 MAX_VELAS = 500
 
 # =========================
-# FUNÇÕES
+# BANCO LOCAL
 # =========================
 def carregar():
     if os.path.exists(DB_FILE):
@@ -21,6 +21,15 @@ def carregar():
 def salvar(lista):
     pd.DataFrame({"vela": lista}).to_csv(DB_FILE, index=False)
 
+# =========================
+# INICIALIZAÇÃO
+# =========================
+if "velas" not in st.session_state:
+    st.session_state.velas = carregar()
+
+# =========================
+# EXTRAÇÃO ROBUSTA
+# =========================
 def extrair_velas(texto):
     if not texto:
         return []
@@ -40,106 +49,109 @@ def extrair_velas(texto):
     return velas
 
 # =========================
-# BUSCA COM TOLERÂNCIA
+# BUSCA EXATA (SEM FALHA)
 # =========================
-def buscar_padrao(lista, padrao, tolerancia=0.05):
+def buscar_padrao(lista, padrao):
     resultados = []
+    tamanho = len(padrao)
 
-    for i in range(len(lista) - len(padrao) + 1):
-        match = True
-        for j in range(len(padrao)):
-            if abs(lista[i + j] - padrao[j]) > tolerancia:
-                match = False
-                break
+    for i in range(len(lista) - tamanho + 1):
+        trecho = lista[i:i+tamanho]
+
+        # comparação arredondada (corrige erro de float)
+        match = all(round(trecho[j], 2) == round(padrao[j], 2) for j in range(tamanho))
 
         if match:
+            proximas = lista[i+tamanho:i+tamanho+15]
+
             resultados.append({
                 "posicao": i,
-                "padrao": lista[i:i+len(padrao)],
-                "proximas": lista[i+len(padrao):i+len(padrao)+20]
+                "padrao": trecho,
+                "proximas": proximas
             })
 
     return resultados
 
 # =========================
-# INÍCIO
+# INTERFACE
 # =========================
-if "velas" not in st.session_state:
-    st.session_state.velas = carregar()
-
 st.title("📊 HISTÓRICO DE VELAS")
 
 entrada = st.text_area("Cole as velas:", height=150)
 
-colA, colB, colC = st.columns(3)
+col1, col2, col3 = st.columns(3)
 
-with colA:
+# ADICIONAR
+with col1:
     if st.button("🚀 ADICIONAR"):
         novas = extrair_velas(entrada)
+
         if novas:
             if len(novas) > MAX_VELAS:
                 novas = novas[:MAX_VELAS]
 
             st.session_state.velas.extend(novas)
             salvar(st.session_state.velas)
+
             st.success(f"{len(novas)} velas adicionadas!")
             st.rerun()
         else:
-            st.error("Nenhuma vela válida encontrada!")
+            st.error("Nenhuma vela válida!")
 
-with colB:
+# SALVAR
+with col2:
     if st.button("💾 SALVAR"):
         salvar(st.session_state.velas)
-        st.success("Salvo!")
+        st.success("Dados salvos!")
 
-with colC:
+# RELOAD
+with col3:
     if st.button("🔄 RELOAD"):
         st.session_state.velas = carregar()
-        st.success("Recarregado!")
+        st.success("Dados recarregados!")
         st.rerun()
 
 # =========================
 # 🔍 BUSCA DE PADRÃO
 # =========================
 st.divider()
-st.subheader("🔍 BUSCAR PADRÃO NO HISTÓRICO")
+st.subheader("🔍 BUSCAR PADRÃO (EXATO - 5 VELAS)")
 
-entrada_padrao = st.text_input("Digite o padrão (ex: 1.20 1.50 1.10)")
-tolerancia = st.slider("Tolerância", 0.0, 0.5, 0.05)
+entrada_padrao = st.text_input("Digite 5 velas (ex: 1.20 1.50 1.10 2.00 1.30)")
 
-if st.button("🔎 BUSCAR"):
+if st.button("🔎 BUSCAR PADRÃO"):
     padrao = extrair_velas(entrada_padrao)
 
-    if not padrao:
-        st.warning("Digite um padrão válido")
+    if len(padrao) != 5:
+        st.error("Digite exatamente 5 velas!")
     else:
-        resultados = buscar_padrao(st.session_state.velas, padrao, tolerancia)
+        resultados = buscar_padrao(st.session_state.velas, padrao)
 
         if resultados:
-            st.success(f"{len(resultados)} ocorrência(s) encontrada(s)")
+            st.error(f"🚨 PADRÃO ENCONTRADO {len(resultados)}x!")
 
             for r in resultados:
                 st.markdown(f"**📍 Posição:** {r['posicao']}")
-                st.write("Padrão encontrado:", r["padrao"])
-                st.write("➡️ Próximas 20 velas:", r["proximas"])
+                st.write("Padrão:", [f"{v:.2f}x" for v in r["padrao"]])
+                st.write("🔥 Próximas 15 velas:", [f"{v:.2f}x" for v in r["proximas"]])
                 st.divider()
         else:
-            st.error("Nenhum padrão encontrado")
+            st.warning("Nenhum padrão encontrado")
 
 # =========================
 # BACKUP
 # =========================
 st.divider()
-st.subheader("💾 Backup")
+st.subheader("💾 BACKUP")
 
-col1, col2 = st.columns(2)
+colb1, colb2 = st.columns(2)
 
-with col1:
+with colb1:
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "rb") as f:
             st.download_button("📥 Baixar Backup", f, "backup_velas.csv")
 
-with col2:
+with colb2:
     arquivo = st.file_uploader("📤 Restaurar Backup", type=["csv"])
     if arquivo:
         df = pd.read_csv(arquivo)
@@ -171,15 +183,15 @@ if st.session_state.velas:
 
     st.divider()
 
-    col1, col2 = st.columns(2)
+    colx1, colx2 = st.columns(2)
 
-    with col1:
+    with colx1:
         if st.button("🗑️ APAGAR ÚLTIMAS 20"):
             st.session_state.velas = st.session_state.velas[:-20]
             salvar(st.session_state.velas)
             st.rerun()
 
-    with col2:
+    with colx2:
         if st.button("🚨 ZERAR TUDO"):
             if os.path.exists(DB_FILE):
                 os.remove(DB_FILE)
