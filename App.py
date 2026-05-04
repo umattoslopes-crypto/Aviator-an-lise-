@@ -7,12 +7,12 @@ import numpy as np
 import cv2
 import easyocr
 
-# =========================
-# BANCO DE DADOS
-# =========================
 DB_FILE = "banco_velas_projeto.csv"
 LIMITE = 10000
 
+# =========================
+# BANCO DE DADOS
+# =========================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
@@ -29,51 +29,47 @@ def load_reader():
     return easyocr.Reader(['en'], gpu=False)
 
 # =========================
-# OCR CRIATIVO (CANAL DE COR)
+# OCR VOLTANDO AO QUE FUNCIONA
 # =========================
 def extrair_velas_print(img):
     reader = load_reader()
-    img_np = np.array(img.convert('RGB'))
+    # Converte para cinza - Simples e eficaz como no início
+    img_np = np.array(img.convert('L'))
     
-    # CRIATIVIDADE: Em vez de cinza, pegamos o canal Azul.
-    # No Big Bass, os números brancos brilham no canal azul, o fundo verde/vermelho some.
-    b_channel = img_np[:, :, 2] 
+    # Threshold fixo para não "comer" o ponto decimal do 1.16
+    _, img_bin = cv2.threshold(img_np, 155, 255, cv2.THRESH_BINARY)
     
-    # Aumenta o contraste para o ponto decimal (.) ficar nítido
-    _, bin_img = cv2.threshold(b_channel, 200, 255, cv2.THRESH_BINARY)
+    # Chamada padrão do EasyOCR (sem os parâmetros que causaram o erro no seu print)
+    res = reader.readtext(img_bin)
     
-    # Tira o ruído (pontinhos pretos)
-    kernel = np.ones((2,2), np.uint8)
-    bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_OPEN, kernel)
-
-    # st.image(bin_img, caption="Como o código está vendo agora") # Descomente para testar
-
-    resultados = reader.readtext(bin_img, detail=1, contrast_ths=0.1, expand_ths=0.2)
     itens = []
-
-    for (bbox, texto, conf) in resultados:
+    for (bbox, texto, conf) in res:
         t = texto.lower().replace(',', '.').replace(' ', '').strip()
         
-        # Regex captura o número. Se for "116", corrige pra "1.16"
+        # Busca apenas os números
         nums = re.findall(r"(\d+(?:\.\d+)?)", t)
         for n in nums:
             try:
                 v = float(n)
-                if v > 100 and '.' not in n: v = float(n[0] + "." + n[1:])
+                # Correção automática se o ponto sumir (ex: 116 vira 1.16)
+                if v > 100 and '.' not in n:
+                    v = float(n[0] + "." + n[1:])
                 
                 if 1.0 <= v <= 5000:
-                    y = np.mean([p[1] for p in bbox])
-                    x = np.mean([p[0] for p in bbox])
-                    if y > 400: # Ignora o topo do jogo
+                    # Cálculo de centro simples para evitar TypeError
+                    y = (bbox[0][1] + bbox[2][1]) / 2
+                    x = (bbox[0][0] + bbox[1][0]) / 2
+                    
+                    if y > 400: # Ignora o topo do print
                         itens.append({'x': x, 'y': y, 'v': v})
             except: continue
 
-    # Ordena: Cima->Baixo e Esquerda->Direita
-    itens.sort(key=lambda i: (i['y'] // 35, i['x']))
+    # Ordena da esquerda para a direita, linha por linha
+    itens.sort(key=lambda i: (i['y'] // 30, i['x']))
     return [i['v'] for i in itens]
 
 # =========================
-# INTERFACE (LAYOUT DO DESENHO)
+# INTERFACE (EXATAMENTE SEU DESENHO)
 # =========================
 st.title("ATE 10.000 VELAS")
 
@@ -87,7 +83,7 @@ with aba2:
 if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
     novas = []
     if arquivo:
-        with st.spinner("Forçando leitura..."):
+        with st.spinner("Lendo print..."):
             novas = extrair_velas_print(Image.open(arquivo))
     if manual:
         novas += [float(n) for n in re.findall(r"(\d+(?:\.\d+)?)", manual.replace(',', '.'))]
@@ -96,11 +92,11 @@ if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
         st.session_state.velas += novas
         salvar(); st.success(f"{len(novas)} velas lidas!"); st.rerun()
     else:
-        st.error("Não consegui ler. O print está com brilho baixo?")
+        st.error("Nenhuma vela detectada. Verifique o print.")
 
 st.divider()
 
-# BUSCA, HISTÓRICO E RESETS (IGUAL AO SEU DESENHO)
+# BUSCA DE PADRÃO
 st.write("**BUSCA DE PADRÃO**")
 col_b1, col_b2 = st.columns([0.8, 0.2])
 with col_b1: seq = st.text_input("Sequência...", label_visibility="collapsed")
@@ -112,11 +108,13 @@ with col_b2:
             for i in range(len(h) - len(p) + 1):
                 if h[i:i+len(p)] == p: st.success(f"Achado! Próximas: {h[i+len(p):i+len(p)+5]}")
 
+# HISTÓRICO
 st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
 if st.session_state.velas:
     df_h = pd.DataFrame({"vela": reversed(st.session_state.velas)})
     st.dataframe(df_h.style.map(lambda v: "color:#FF00FF; font-weight:bold" if v>=8 else "color:#00FF00" if v>=2 else "color:white").format("{:.2f}x"), use_container_width=True, height=300)
 
+# ÚLTIMAS 20 E RESET (LADO A LADO)
 col_f1, col_f2 = st.columns([0.6, 0.4])
 with col_f1:
     st.write("**ÚLTIMAS 20**")
@@ -125,7 +123,7 @@ with col_f1:
         txt = [f"<b style='color:{('#FF00FF' if v>=8 else '#00FF00' if v>=2 else '#FFF')}'>{v:.2f}x</b>" for v in ultimas]
         st.markdown(" , ".join(txt), unsafe_allow_html=True)
 with col_f2:
-    st.write("**RESETAR**")
+    st.write("**REDEFINIR**")
     if st.button("APAGAR ÚLTIMAS 20"):
         st.session_state.velas = st.session_state.velas[:-20]
         salvar(); st.rerun()
