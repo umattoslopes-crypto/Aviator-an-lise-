@@ -19,7 +19,8 @@ if 'velas' not in st.session_state:
             df = pd.read_csv(DB_FILE)
             st.session_state.velas = [float(v) for v in df['vela'].dropna() if float(v) > 0]
         except: st.session_state.velas = []
-    else: st.session_state.velas = []
+    else:
+        st.session_state.velas = []
 
 def salvar():
     pd.DataFrame({'vela': st.session_state.velas[-LIMITE:]}).to_csv(DB_FILE, index=False)
@@ -29,70 +30,78 @@ def load_reader():
     return easyocr.Reader(['en'], gpu=False)
 
 # =========================
-# OCR VOLTANDO AO QUE FUNCIONA
+# OCR COM FOCO NO PONTO DECIMAL
 # =========================
 def extrair_velas_print(img):
     reader = load_reader()
-    # Converte para cinza - Simples e eficaz como no início
-    img_np = np.array(img.convert('L'))
+    img_np = np.array(img.convert('RGB'))
+    h, w = img_np.shape[:2]
     
-    # Threshold fixo para não "comer" o ponto decimal do 1.16
-    _, img_bin = cv2.threshold(img_np, 155, 255, cv2.THRESH_BINARY)
+    # Corte da área das velas
+    area = img_np[int(h*0.52):int(h*0.88), int(w*0.08):int(w*0.78)]
     
-    # Chamada padrão do EasyOCR (sem os parâmetros que causaram o erro no seu print)
-    res = reader.readtext(img_bin)
+    # --- MELHORIA PARA O PONTO DECIMAL ---
+    # 1. Aumenta a imagem em 2x (ajuda a IA a ver o ponto)
+    area = cv2.resize(area, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     
+    # 2. Converte para cinza e aumenta a nitidez (Unsharp Mask)
+    gray = cv2.cvtColor(area, cv2.COLOR_RGB2GRAY)
+    gaussian = cv2.GaussianBlur(gray, (0, 0), 3)
+    gray = cv2.addWeighted(gray, 1.5, gaussian, -0.5, 0)
+    
+    # 3. Binarização suave para não apagar o ponto
+    _, bin_img = cv2.threshold(gray, 165, 255, cv2.THRESH_BINARY)
+
+    res = reader.readtext(bin_img)
     itens = []
     for (bbox, texto, conf) in res:
         t = texto.lower().replace(',', '.').replace(' ', '').strip()
         
-        # Busca apenas os números
+        # Busca números decimais
         nums = re.findall(r"(\d+(?:\.\d+)?)", t)
         for n in nums:
             try:
-                v = float(n)
-                # Correção automática se o ponto sumir (ex: 116 vira 1.16)
-                if v > 100 and '.' not in n:
-                    v = float(n[0] + "." + n[1:])
+                val = float(n)
                 
-                if 1.0 <= v <= 5000:
-                    # Cálculo de centro simples para evitar TypeError
-                    y = (bbox[0][1] + bbox[2][1]) / 2
-                    x = (bbox[0][0] + bbox[1][0]) / 2
-                    
-                    if y > 400: # Ignora o topo do print
-                        itens.append({'x': x, 'y': y, 'v': v})
+                # RECONSTRUÇÃO LÓGICA: Se o ponto sumiu (ex: 116), nós forçamos o ponto.
+                # Como velas > 100 são raras, se ler 116 num lugar de vela baixa, corrigimos.
+                if val > 100 and '.' not in n:
+                    # Transforma 116 em 1.16 ou 964 em 9.64
+                    val = float(n[0] + "." + n[1:])
+                
+                if 1.0 <= val <= 5000:
+                    y = np.mean([p[1] for p in bbox])
+                    x = np.mean([p[0] for p in bbox])
+                    itens.append({'x': x, 'y': y, 'v': val})
             except: continue
 
     # Ordena da esquerda para a direita, linha por linha
-    itens.sort(key=lambda i: (i['y'] // 30, i['x']))
+    itens.sort(key=lambda i: (i['y'] // 50, i['x']))
     return [i['v'] for i in itens]
 
 # =========================
-# INTERFACE (EXATAMENTE SEU DESENHO)
+# INTERFACE (LAYOUT DO DESENHO)
 # =========================
 st.title("ATE 10.000 VELAS")
 
 aba1, aba2 = st.tabs(["INSERIR MANUAL", "INSERIR POR PRINT"])
 
 with aba1:
-    manual = st.text_area("Ex: 1.16x 10.71x", height=100)
+    manual = st.text_area("Ex: 1.16x, 10.71x", height=100)
 with aba2:
-    arquivo = st.file_uploader("Envie o print", type=['png','jpg','jpeg'])
+    arquivo = st.file_uploader("Envie o print aqui", type=['png','jpg','jpeg'])
 
 if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
     novas = []
     if arquivo:
-        with st.spinner("Lendo print..."):
+        with st.spinner("Refinando imagem..."):
             novas = extrair_velas_print(Image.open(arquivo))
     if manual:
         novas += [float(n) for n in re.findall(r"(\d+(?:\.\d+)?)", manual.replace(',', '.'))]
     
     if novas:
         st.session_state.velas += novas
-        salvar(); st.success(f"{len(novas)} velas lidas!"); st.rerun()
-    else:
-        st.error("Nenhuma vela detectada. Verifique o print.")
+        salvar(); st.success(f"{len(novas)} velas detectadas!"); st.rerun()
 
 st.divider()
 
@@ -112,9 +121,14 @@ with col_b2:
 st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
 if st.session_state.velas:
     df_h = pd.DataFrame({"vela": reversed(st.session_state.velas)})
-    st.dataframe(df_h.style.map(lambda v: "color:#FF00FF; font-weight:bold" if v>=8 else "color:#00FF00" if v>=2 else "color:white").format("{:.2f}x"), use_container_width=True, height=300)
+    st.dataframe(
+        df_h.style.map(lambda v: "color:#FF00FF; font-weight:bold" if v>=8 else "color:#00FF00" if v>=2 else "color:white").format("{:.2f}x"),
+        use_container_width=True, height=350
+    )
 
-# ÚLTIMAS 20 E RESET (LADO A LADO)
+st.divider()
+
+# ÚLTIMAS 20 E REDEFINIR
 col_f1, col_f2 = st.columns([0.6, 0.4])
 with col_f1:
     st.write("**ÚLTIMAS 20**")
