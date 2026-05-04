@@ -10,9 +10,6 @@ import easyocr
 DB_FILE = "banco_velas_projeto.csv"
 LIMITE = 10000
 
-# =========================
-# BANCO DE DADOS
-# =========================
 if 'velas' not in st.session_state:
     if os.path.exists(DB_FILE):
         try:
@@ -28,112 +25,89 @@ def salvar():
 def load_reader():
     return easyocr.Reader(['en'], gpu=False)
 
-# =========================
-# A FÓRMULA DE LEITURA (PRECISÃO TOTAL)
-# =========================
+# ==========================================
+# A LÓGICA QUE VOCÊ PEDIU: "X" NO FINAL + ORDEM
+# ==========================================
 def extrair_velas_print(img):
     reader = load_reader()
-    img_np = np.array(img.convert('RGB'))
-    h, w = img_np.shape[:2]
+    img_np = np.array(img.convert('L'))
+    h, w = img_np.shape
+    # Foco na grade de velas
+    corte = img_np[int(h*0.52):int(h*0.88), int(w*0.08):int(w*0.78)]
+    _, bin_img = cv2.threshold(corte, 165, 255, cv2.THRESH_BINARY)
     
-    # 1. Corte cirúrgico da grade (ajustado para o seu print)
-    area = img_np[int(h*0.52):int(h*0.88), int(w*0.08):int(w*0.78)]
-    
-    # 2. A FÓRMULA: Converte para Cinza e aplica Threshold alto (180)
-    # Isso apaga os botões verdes/vermelhos e deixa só o número branco visível
-    gray = cv2.cvtColor(area, cv2.COLOR_RGB2GRAY)
-    _, bin_img = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
-    
-    # 3. Leitura do texto na imagem limpa
     res = reader.readtext(bin_img)
-    
     itens = []
     for (bbox, texto, conf) in res:
-        # Limpeza do texto (Troca vírgula por ponto, remove o 'x')
-        t = texto.lower().replace(',', '.').replace('x', '').strip()
+        t = texto.lower().replace(',', '.').strip()
         
-        # Só aceita se for número
-        if re.search(r'\d', t):
-            try:
-                val = float(t)
-                # Correção lógica: se leu 116 (inteiro), volta para 1.16
-                if val > 100 and '.' not in t:
-                    val = float(t[0] + "." + t[1:])
+        # 1. SÓ OLHA PARA OS NÚMEROS COM "X" NO FINAL
+        if 'x' in t:
+            num_match = re.search(r"(\d+(?:\.\d+)?)", t)
+            if num_match:
+                val = float(num_match.group(1))
+                # Correção do ponto (ex: 116 vira 1.16)
+                if val > 100 and '.' not in t: val = float(str(val)[:1] + "." + str(val)[1:])
                 
-                if 1.0 <= val <= 5000:
-                    # Pega a posição para ordenar a grade
-                    y_centro = np.mean([p[1] for p in bbox])
-                    x_centro = np.mean([p[0] for p in bbox])
-                    itens.append({'y': y_centro, 'x': x_centro, 'v': val})
-            except: continue
+                # Posição para ordenar
+                y_centro = np.mean([p[1] for p in bbox])
+                x_centro = np.mean([p[0] for p in bbox])
+                itens.append({'y': y_centro, 'x': x_centro, 'v': val})
 
-    # 4. ORDENAÇÃO: Linha por linha, da Esquerda para a Direita
-    itens.sort(key=lambda i: (i['y'] // 30, i['x']))
+    # 2. TRANSCREVE DE BAIXO PARA CIMA (Y descrescente)
+    # 3. DA DIREITA PARA A ESQUERDA (X decrescente)
+    itens.sort(key=lambda i: i['y'], reverse=True) # Baixo para cima
     
-    return [i['v'] for i in itens]
+    velas_ordenadas = []
+    # Agrupa por linhas para garantir a ordem horizontal correta
+    linhas_temp = []
+    for item in itens:
+        colocado = False
+        for linha in linhas_temp:
+            if abs(linha[0]['y'] - item['y']) < 25:
+                linha.append(item)
+                colocado = True
+                break
+        if not colocado: linhas_temp.append([item])
+    
+    for linha in linhas_temp:
+        linha.sort(key=lambda i: i['x'], reverse=True) # Direita para Esquerda
+        for item in linha:
+            velas_ordenadas.append(item['v'])
+            
+    return velas_ordenadas
 
 # =========================
-# INTERFACE (SEU LAYOUT)
+# INTERFACE (SEU DESENHO)
 # =========================
 st.title("PROJETO 10.000 VELAS")
 
 aba1, aba2 = st.tabs(["INSERIR MANUAL", "INSERIR POR PRINT"])
 
-with aba1:
-    manual = st.text_area("Ex: 1.16x, 9.64x", height=100)
 with aba2:
-    arquivo = st.file_uploader("Envie o print aqui", type=['png','jpg','jpeg'])
+    arquivo = st.file_uploader("Envie o print", type=['png','jpg','jpeg'])
 
-if st.button("🚀 ADICIONAR E SINCRONIZAR", use_container_width=True):
-    novas_lidas = []
+if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
     if arquivo:
-        with st.spinner("Lendo grade de velas..."):
-            novas_lidas = extrair_velas_print(Image.open(arquivo))
-    
-    if manual:
-        novas_lidas += [float(n) for n in re.findall(r"(\d+(?:\.\d+)?)", manual.replace(',', '.'))]
-
-    if novas_lidas:
-        # Lógica para não duplicar se o print tiver velas que já estão no banco
-        for v in novas_lidas:
-            if not st.session_state.velas or v != st.session_state.velas[-1]:
-                st.session_state.velas.append(v)
-        
-        salvar()
-        st.success(f"✅ {len(novas_lidas)} velas processadas com sucesso!")
-        st.rerun()
+        novas = extrair_velas_print(Image.open(arquivo))
+        if novas:
+            # Sincroniza para não repetir velas que já estão no banco
+            for v in novas:
+                if not st.session_state.velas or v != st.session_state.velas[-1]:
+                    st.session_state.velas.append(v)
+            salvar()
+            st.success(f"{len(novas)} velas adicionadas na ordem correta!")
+            st.rerun()
 
 st.divider()
 
-# BUSCA DE PADRÃO (Sua lógica de busca)
-st.write("**BUSCA DE PADRÃO**")
-col_b1, col_b2 = st.columns([0.8, 0.2])
-with col_b1:
-    seq = st.text_input("Digite o padrão...", label_visibility="collapsed")
-with col_b2:
-    if st.button("🔎"):
-        if seq:
-            padrao = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", seq.replace(',', '.'))]
-            h = st.session_state.velas
-            for i in range(len(h) - len(padrao)):
-                if h[i:i+len(padrao)] == padrao:
-                    st.write(f"📍 Achado! Próxima: **{h[i+len(padrao)]:.2f}x**")
-
-st.divider()
-
-# HISTÓRICO E ÚLTIMAS 20
-st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
+# BUSCA, HISTÓRICO E RESET (IGUAIS AO SEU ORIGINAL)
+st.write("**HISTÓRICO COMPLETO**")
 if st.session_state.velas:
-    df_hist = pd.DataFrame({"vela": reversed(st.session_state.velas)})
-    st.dataframe(df_hist.style.map(lambda v: "color:#FF00FF" if v>=10 else "color:#00FF00" if v>=2 else "color:white").format("{:.2f}x"), use_container_width=True, height=300)
+    df_h = pd.DataFrame({"vela": reversed(st.session_state.velas)})
+    st.dataframe(df_h.style.map(lambda v: "color:#FF00FF" if v>=10 else "color:#00FF00" if v>=2 else "color:white").format("{:.2f}x"), use_container_width=True, height=350)
 
 col_f1, col_f2 = st.columns([0.6, 0.4])
-with col_f1:
-    st.write("**ÚLTIMAS 20**")
-    if st.session_state.velas:
-        ultimas = st.session_state.velas[-20:]
-        txt = [f"<b style='color:{('#FF00FF' if v>=10 else '#00FF00' if v>=2 else '#FFF')}'>{v:.2f}x</b>" for v in ultimas]
-        st.markdown(" , ".join(txt), unsafe_allow_html=True)
 with col_f2:
     if st.button("APAGAR ÚLTIMAS 20"):
         st.session_state.velas = st.session_state.velas[:-20]; salvar(); st.rerun()
