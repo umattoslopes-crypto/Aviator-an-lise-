@@ -7,7 +7,7 @@ DB_FILE = "velas_salvas.csv"
 MAX_VELAS = 500
 
 # =========================
-# FUNÇÕES DE ARQUIVO
+# FUNÇÕES
 # =========================
 def carregar():
     if os.path.exists(DB_FILE):
@@ -21,15 +21,6 @@ def carregar():
 def salvar(lista):
     pd.DataFrame({"vela": lista}).to_csv(DB_FILE, index=False)
 
-# =========================
-# INICIALIZAÇÃO
-# =========================
-if "velas" not in st.session_state:
-    st.session_state.velas = carregar()
-
-# =========================
-# EXTRAÇÃO
-# =========================
 def extrair_velas(texto):
     if not texto:
         return []
@@ -49,28 +40,48 @@ def extrair_velas(texto):
     return velas
 
 # =========================
-# INTERFACE
+# BUSCA COM TOLERÂNCIA
 # =========================
+def buscar_padrao(lista, padrao, tolerancia=0.05):
+    resultados = []
+
+    for i in range(len(lista) - len(padrao) + 1):
+        match = True
+        for j in range(len(padrao)):
+            if abs(lista[i + j] - padrao[j]) > tolerancia:
+                match = False
+                break
+
+        if match:
+            resultados.append({
+                "posicao": i,
+                "padrao": lista[i:i+len(padrao)],
+                "proximas": lista[i+len(padrao):i+len(padrao)+20]
+            })
+
+    return resultados
+
+# =========================
+# INÍCIO
+# =========================
+if "velas" not in st.session_state:
+    st.session_state.velas = carregar()
+
 st.title("📊 HISTÓRICO DE VELAS")
 
 entrada = st.text_area("Cole as velas:", height=150)
 
-# =========================
-# BOTÕES PRINCIPAIS
-# =========================
 colA, colB, colC = st.columns(3)
 
 with colA:
     if st.button("🚀 ADICIONAR"):
         novas = extrair_velas(entrada)
-
         if novas:
             if len(novas) > MAX_VELAS:
                 novas = novas[:MAX_VELAS]
 
             st.session_state.velas.extend(novas)
             salvar(st.session_state.velas)
-
             st.success(f"{len(novas)} velas adicionadas!")
             st.rerun()
         else:
@@ -79,16 +90,44 @@ with colA:
 with colB:
     if st.button("💾 SALVAR"):
         salvar(st.session_state.velas)
-        st.success("Dados salvos!")
+        st.success("Salvo!")
 
 with colC:
     if st.button("🔄 RELOAD"):
         st.session_state.velas = carregar()
-        st.success("Dados recarregados do arquivo!")
+        st.success("Recarregado!")
         st.rerun()
 
 # =========================
-# BACKUP / RESTAURAÇÃO
+# 🔍 BUSCA DE PADRÃO
+# =========================
+st.divider()
+st.subheader("🔍 BUSCAR PADRÃO NO HISTÓRICO")
+
+entrada_padrao = st.text_input("Digite o padrão (ex: 1.20 1.50 1.10)")
+tolerancia = st.slider("Tolerância", 0.0, 0.5, 0.05)
+
+if st.button("🔎 BUSCAR"):
+    padrao = extrair_velas(entrada_padrao)
+
+    if not padrao:
+        st.warning("Digite um padrão válido")
+    else:
+        resultados = buscar_padrao(st.session_state.velas, padrao, tolerancia)
+
+        if resultados:
+            st.success(f"{len(resultados)} ocorrência(s) encontrada(s)")
+
+            for r in resultados:
+                st.markdown(f"**📍 Posição:** {r['posicao']}")
+                st.write("Padrão encontrado:", r["padrao"])
+                st.write("➡️ Próximas 20 velas:", r["proximas"])
+                st.divider()
+        else:
+            st.error("Nenhum padrão encontrado")
+
+# =========================
+# BACKUP
 # =========================
 st.divider()
 st.subheader("💾 Backup")
@@ -97,16 +136,11 @@ col1, col2 = st.columns(2)
 
 with col1:
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, "rb") as file:
-            st.download_button(
-                "📥 Baixar Backup",
-                file,
-                file_name="backup_velas.csv"
-            )
+        with open(DB_FILE, "rb") as f:
+            st.download_button("📥 Baixar Backup", f, "backup_velas.csv")
 
 with col2:
     arquivo = st.file_uploader("📤 Restaurar Backup", type=["csv"])
-
     if arquivo:
         df = pd.read_csv(arquivo)
         st.session_state.velas = pd.to_numeric(df["vela"], errors="coerce").dropna().tolist()
@@ -118,20 +152,16 @@ with col2:
 # EXIBIÇÃO
 # =========================
 if st.session_state.velas:
-
     dados = list(reversed(st.session_state.velas))
     df = pd.DataFrame({"VELAS": dados})
 
     def colorir(val):
-        try:
-            if val >= 8:
-                return "color: #FF00FF; font-weight: bold"
-            elif val >= 2:
-                return "color: #008000; font-weight: bold"
-            else:
-                return "color: #000000"
-        except:
-            return ""
+        if val >= 8:
+            return "color: #FF00FF; font-weight: bold"
+        elif val >= 2:
+            return "color: #008000; font-weight: bold"
+        else:
+            return "color: #000000"
 
     st.dataframe(
         df.style.map(colorir).format("{:.2f}x"),
