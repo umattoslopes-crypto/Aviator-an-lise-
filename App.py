@@ -6,7 +6,9 @@ from PIL import Image
 import numpy as np
 import cv2
 
-# OCR seguro
+# =========================
+# OCR (seguro)
+# =========================
 try:
     import easyocr
     OCR_OK = True
@@ -15,8 +17,6 @@ except:
 
 DB_FILE = "banco_velas_projeto.csv"
 LIMITE = 10000
-
-st.title("ATE 10.000 VELAS")
 
 # =========================
 # BANCO DE DADOS
@@ -35,7 +35,7 @@ def salvar():
     pd.DataFrame({'vela': st.session_state.velas[-LIMITE:]}).to_csv(DB_FILE, index=False)
 
 # =========================
-# OCR
+# CARREGAR OCR
 # =========================
 @st.cache_resource
 def load_reader():
@@ -49,21 +49,22 @@ def load_reader():
 reader = load_reader()
 
 # =========================
-# EXTRAÇÃO DE VELAS
+# EXTRAIR VELAS (CORRIGIDO)
 # =========================
 def extrair_velas_print(img):
     try:
         img_np = np.array(img.convert('RGB'))
         h, w = img_np.shape[:2]
 
-        # corte da área dos resultados
+        # corte da área correta
         img_np = img_np[int(h*0.52):int(h*0.88), int(w*0.08):int(w*0.78)]
 
         st.image(img_np, caption="Área capturada")
 
         gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-        gray = cv2.convertScaleAbs(gray, alpha=1.6, beta=10)
-        _, bin_img = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY_INV)
+        gray = cv2.convertScaleAbs(gray, alpha=1.8, beta=20)
+
+        _, bin_img = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY)
 
         if reader is None:
             st.warning("OCR não disponível")
@@ -84,7 +85,7 @@ def extrair_velas_print(img):
             if 'x' not in t:
                 continue
 
-            match = re.findall(r"\d+\.\d+x", t)
+            match = re.findall(r"\d+(?:\.\d+)?x", t)
 
             if match:
                 y = np.mean([p[1] for p in bbox])
@@ -98,7 +99,9 @@ def extrair_velas_print(img):
                 except:
                     pass
 
-        # agrupar por linhas
+        # =========================
+        # AGRUPAR LINHAS
+        # =========================
         linhas = []
         tol = 25
 
@@ -112,11 +115,14 @@ def extrair_velas_print(img):
             if not colocado:
                 linhas.append([item])
 
-        # ordem correta: topo → baixo, direita → esquerda
-        linhas.sort(key=lambda l: l[0]['y'])
+        # 🔥 ORDEM QUE VOCÊ PEDIU
+        # debaixo → cima
+        linhas.sort(key=lambda l: l[0]['y'], reverse=True)
 
         velas = []
+
         for linha in linhas:
+            # direita → esquerda
             linha.sort(key=lambda i: -i['x'])
             for item in linha:
                 velas.append(item['v'])
@@ -130,6 +136,8 @@ def extrair_velas_print(img):
 # =========================
 # INTERFACE
 # =========================
+st.title("ATE 10.000 VELAS")
+
 aba1, aba2 = st.tabs(["INSERIR MANUAL", "INSERIR POR PRINT"])
 
 with aba1:
@@ -165,7 +173,6 @@ st.divider()
 # BUSCA DE PADRÃO
 # =========================
 st.write("**BUSCA DE PADRÃO**")
-
 col_b1, col_b2 = st.columns([0.8, 0.2])
 
 with col_b1:
@@ -177,18 +184,9 @@ with col_b2:
             padrao = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", seq.replace(',', '.'))]
             h = st.session_state.velas
 
-            def comparar(a, b, tol=0.01):
-                return all(abs(x - y) <= tol for x, y in zip(a, b))
-
-            achou = False
-
             for i in range(len(h) - len(padrao) + 1):
-                if comparar(h[i:i+len(padrao)], padrao):
+                if h[i:i+len(padrao)] == padrao:
                     st.success(f"Achado! Próximas: {h[i+len(padrao):i+len(padrao)+5]}")
-                    achou = True
-
-            if not achou:
-                st.warning("Nenhum padrão encontrado")
 
 st.divider()
 
@@ -198,7 +196,7 @@ st.divider()
 st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
 
 if st.session_state.velas:
-    df_hist = pd.DataFrame({"vela": st.session_state.velas[::-1]})
+    df_hist = pd.DataFrame({"vela": reversed(st.session_state.velas)})
 
     st.dataframe(
         df_hist.style.map(
@@ -213,7 +211,7 @@ if st.session_state.velas:
 st.divider()
 
 # =========================
-# ÚLTIMAS 20
+# ÚLTIMAS 20 E RESET
 # =========================
 col_f1, col_f2 = st.columns([0.6, 0.4])
 
