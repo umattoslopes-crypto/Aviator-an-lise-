@@ -29,104 +29,87 @@ def load_reader():
     return easyocr.Reader(['en'], gpu=False)
 
 # =========================
-# OCR LEVE (PARA NÃO DAR ERRO)
+# OCR E SINCRONIZAÇÃO
 # =========================
 def extrair_velas_print(img):
     reader = load_reader()
-    # Converte para cinza sem filtros pesados que travam o app
     img_np = np.array(img.convert('L'))
-    
-    # Corte simples da área (evita processar a imagem toda)
     h, w = img_np.shape
+    # Foco na grade de velas
     corte = img_np[int(h*0.52):int(h*0.88), int(w*0.08):int(w*0.78)]
-    
-    # Threshold simples e rápido
     _, bin_img = cv2.threshold(corte, 160, 255, cv2.THRESH_BINARY)
     
     res = reader.readtext(bin_img)
     itens = []
     for (bbox, texto, conf) in res:
-        # Troca vírgula por ponto e limpa o texto
         t = texto.lower().replace(',', '.').replace(' ', '').strip()
-        
-        # Busca apenas os números
         nums = re.findall(r"(\d+(?:\.\d+)?)", t)
         for n in nums:
             try:
                 v = float(n)
-                # PROTEÇÃO PARA O 1.16x: Se leu 116 (inteiro alto), corrige a posição do ponto
-                if v > 100 and '.' not in n:
-                    v = float(n[0] + "." + n[1:])
-                
+                if v > 100 and '.' not in n: v = float(n + "." + n[1:])
                 if 1.0 <= v <= 5000:
-                    y = np.mean([p[1] for p in bbox])
-                    x = np.mean([p[0] for p in bbox])
+                    y = np.mean([p for p in bbox])
+                    x = np.mean([p for p in bbox])
                     itens.append({'x': x, 'y': y, 'v': v})
             except: continue
-
-    # Ordena da esquerda para a direita, linha por linha
-    itens.sort(key=lambda i: (i['y'] // 30, i['x']))
+    
+    # Ordena para seguir o fluxo do jogo: Direita para Esquerda, Cima para Baixo
+    itens.sort(key=lambda i: (i['y'] // 30, i['x']), reverse=True)
     return [i['v'] for i in itens]
 
 # =========================
-# INTERFACE (LAYOUT DO SEU DESENHO)
+# INTERFACE COM SINCRONISMO
 # =========================
-st.title("ANÁLISE DE VELAS")
+st.title("SCANNER DE CICLOS SINCRONIZADO")
 
 aba1, aba2 = st.tabs(["INSERIR MANUAL", "INSERIR POR PRINT"])
 
-with aba1:
-    manual = st.text_area("Ex: 1.16x 10.71x 5x", height=100)
 with aba2:
-    arquivo = st.file_uploader("Envie o print", type=['png','jpg','jpeg'])
+    arquivo = st.file_uploader("Suba seus prints em ordem", type=['png','jpg','jpeg'])
 
-if st.button("🚀 ADICIONAR AO HISTÓRICO", use_container_width=True):
-    novas = []
+if st.button("🚀 ADICIONAR E SINCRONIZAR"):
     if arquivo:
-        with st.spinner("Lendo..."):
-            novas = extrair_velas_print(Image.open(arquivo))
-    if manual:
-        # Captura números do manual também
-        novas += [float(n) for n in re.findall(r"(\d+(?:\.\d+)?)", manual.replace(',', '.'))]
-    
-    if novas:
-        st.session_state.velas += novas
-        salvar(); st.success(f"{len(novas)} velas detectadas!"); st.rerun()
+        velas_do_print = extrair_velas_print(Image.open(arquivo))
+        
+        if velas_do_print:
+            # --- LÓGICA DE SINCRONIZAÇÃO ---
+            if len(st.session_state.velas) >= 4:
+                # Pegamos as últimas 4 velas do banco para servir de "âncora"
+                ancora = st.session_state.velas[-4:]
+                
+                # Procuramos essa sequência exata no print
+                index_sinc = -1
+                for i in range(len(velas_do_print) - 3):
+                    if velas_do_print[i:i+4] == ancora:
+                        index_sinc = i + 4 # O ponto de partida é após a âncora
+                        break
+                
+                if index_sinc != -1:
+                    novas = velas_do_print[index_sinc:]
+                    st.session_state.velas += novas
+                    st.success(f"Sincronizado! {len(novas)} novas velas adicionadas.")
+                else:
+                    # Se não achou a âncora, adiciona tudo (pode ser um print de outro horário)
+                    st.session_state.velas += velas_do_print
+                    st.warning("Sequência nova detectada. Adicionado sem sincronia.")
+            else:
+                # Se o banco for pequeno, adiciona tudo
+                st.session_state.velas += velas_do_print
+                st.success("Primeiras velas adicionadas!")
+            
+            salvar()
+            st.rerun()
 
+# =========================
+# BUSCA E HISTÓRICO
+# =========================
 st.divider()
-
-# BUSCA DE PADRÃO
-st.write("**BUSCA DE PADRÃO**")
-col_b1, col_b2 = st.columns([0.8, 0.2])
-with col_b1: seq = st.text_input("Sequência...", label_visibility="collapsed")
-with col_b2:
-    if st.button("🔎"):
-        if seq:
-            p = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", seq.replace(',', '.'))]
-            h = st.session_state.velas
-            for i in range(len(h) - len(p) + 1):
-                if h[i:i+len(p)] == p: st.success(f"Achado! Próximas: {h[i+len(p):i+len(p)+5]}")
-
-# HISTÓRICO
-st.write(f"**HISTÓRICO (Total: {len(st.session_state.velas)})**")
+st.write("**HISTÓRICO COMPLETO (Sincronizado)**")
 if st.session_state.velas:
     df_h = pd.DataFrame({"vela": reversed(st.session_state.velas)})
-    st.dataframe(df_h.style.map(lambda v: "color:#FF00FF; font-weight:bold" if v>=8 else "color:#00FF00" if v>=2 else "color:white").format("{:.2f}x"), use_container_width=True, height=300)
+    st.dataframe(df_h.style.map(lambda v: "color:#FF00FF" if v>=10 else "color:#00FF00" if v>=2 else "color:white").format("{:.2f}x"), use_container_width=True, height=350)
 
-# ÚLTIMAS 20 E RESET
-st.divider()
-col_f1, col_f2 = st.columns([0.6, 0.4])
-with col_f1:
-    st.write("**ÚLTIMAS 20**")
-    if st.session_state.velas:
-        ultimas = st.session_state.velas[-20:]
-        txt = [f"<b style='color:{('#FF00FF' if v>=8 else '#00FF00' if v>=2 else '#FFF')}'>{v:.2f}x</b>" for v in ultimas]
-        st.markdown(" , ".join(txt), unsafe_allow_html=True)
-with col_f2:
-    st.write("**REDEFINIR**")
-    if st.button("APAGAR ÚLTIMAS 20"):
-        st.session_state.velas = st.session_state.velas[:-20]
-        salvar(); st.rerun()
-    if st.button("ZERAR TUDO"):
-        if os.path.exists(DB_FILE): os.remove(DB_FILE)
-        st.session_state.velas = []; st.rerun()
+if st.button("ZERAR TUDO"):
+    if os.path.exists(DB_FILE): os.remove(DB_FILE)
+    st.session_state.velas = []; st.rerun()
